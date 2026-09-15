@@ -58,6 +58,30 @@ controller's reply, telling you clearly whether the node is `OK` or still
 `--no-zerotier` if the appliance reaches a public FreePBX endpoint instead.
 
 
+## Uninstall
+
+`scripts/uninstall.sh` reverses the installer and leaves the machine as the
+distribution shipped it: the units, the gateway and its web UI, `aes67-daemon`,
+the PJSIP libraries, the RAVENNA kernel module with its DKMS entry, the kernel
+tuning (sysctls and CPU governor), the service users and the `/opt` source trees.
+
+**ZeroTier is deliberately never touched** - the package, the node identity in
+`/var/lib/zerotier-one` and the network membership stay exactly as they are, so an
+appliance that is rebuilt on site (or restored from an image) does not need a new
+authorisation in `my.zerotier.com`.
+
+```bash
+sudo ./scripts/uninstall.sh --dry-run   # print the plan, change nothing
+sudo ./scripts/uninstall.sh             # show the plan, ask, then remove
+```
+
+Other flags: `--yes` (unattended), `--keep-config` (keep `/etc/aes67-sip.conf`,
+`/etc/daemon.conf`, `/etc/status.json`), `--keep-source` (keep the `/opt`
+checkouts), `--keep-module`, `--governor <name>` and `--purge-deps` (apt-purge the
+appliance-only build dependencies). It finishes with a report, including anything
+it could not remove, and the values it restored.
+
+
 ## Configuration
 
 `/etc/aes67-sip.conf` (installed once, never overwritten). The essentials for the
@@ -177,7 +201,7 @@ src/sip/      SipEngine interface, PJSIP engine, custom pjsua2 audio port, stub 
 src/bridge/   line manager: stream provisioning, call modes, supervision, meters
 src/http/     REST API used by the UI (see docs/api.md)
 webui/        Vite + React UI (dark operator console)
-scripts/      install.sh, build-pjsip.sh, install-deps.sh, setup-ravenna.sh
+scripts/      install.sh, uninstall.sh, build-pjsip.sh, install-deps.sh, setup-ravenna.sh
 systemd/      aes67-sip.service
 docs/         DECISIONS.md (agreed scope), api.md (REST contract)
 ```
