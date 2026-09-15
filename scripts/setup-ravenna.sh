@@ -106,8 +106,10 @@ fi
 # 5. service user
 # ---------------------------------------------------------------------------
 echo "==> creating the aes67-sip service user"
+# --user-group so that a group named aes67-sip exists: the systemd unit runs as
+# User=aes67-sip/Group=aes67-sip and /etc/aes67-sip.conf is owned by that group.
 if ! id aes67-sip >/dev/null 2>&1; then
-  run useradd --system --home-dir /var/lib/aes67-sip --create-home \
+  run useradd --system --user-group --home-dir /var/lib/aes67-sip --create-home \
     --shell /usr/sbin/nologin aes67-sip
 fi
 run usermod -aG audio aes67-sip || true

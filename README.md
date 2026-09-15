@@ -150,6 +150,11 @@ docs/         DECISIONS.md (agreed scope), api.md (REST contract)
 
 - Validated end to end only in **fake mode** so far: the RAVENNA/ALSA path and real SIP
   signalling still need validation on the target appliance (see docs/DECISIONS.md).
+- **Kernel 6.15 and newer** run the RAVENNA driver's 1 ms audio tick as a soft hrtimer,
+  so RTP is emitted in bursts rather than evenly (upstream issue
+  [bondagit/ravenna-alsa-lkm#39](https://github.com/bondagit/ravenna-alsa-lkm/issues/39),
+  open). Receivers with small playout buffers can reject the stream; an LTS kernel
+  (6.6/6.8) uses the hard timer path. The installer warns about this.
 - AES67 audio requires a **PTP grandmaster**; without one the RAVENNA device never locks
   and there is no audio to route.
 - `aes67-daemon`'s HTTP streamer must stay disabled (`streamer_enabled: false`) because

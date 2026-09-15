@@ -283,7 +283,12 @@ else
 PACKAGE_NAME="ravenna-alsa-lkm"
 PACKAGE_VERSION="${LKM_VERSION}"
 BUILT_MODULE_NAME[0]="MergingRavennaALSA"
-DEST_MODULE_LOCATION[0]="/kernel/sound/pci"
+# The module is built by the kernel's kbuild from driver/ (the Makefile there has
+# obj-m := MergingRavennaALSA.o), so DKMS must be told to look for the .ko in
+# driver/ - otherwise it reports "Make sure the name and location of the
+# generated module are correct" even though the compile succeeded.
+BUILT_MODULE_LOCATION[0]="driver"
+DEST_MODULE_LOCATION[0]="/updates/dkms"
 MAKE[0]="make -C \${kernel_source_dir} M=\${dkms_tree}/ravenna-alsa-lkm/${LKM_VERSION}/build/driver modules"
 CLEAN="make -C \${kernel_source_dir} M=\${dkms_tree}/ravenna-alsa-lkm/${LKM_VERSION}/build/driver clean"
 EOF
@@ -295,8 +300,17 @@ EOF
     warn "DKMS build failed with the default compiler; retrying with clang"
     run dkms build -m ravenna-alsa-lkm -v "${LKM_VERSION}" --force \
       -k "$(uname -r)" || true
-    warn "if this keeps failing, build the module manually:"
-    warn "  cd ${LKM_DIR}/driver && make CC=clang && insmod MergingRavennaALSA.ko"
+    # show the compiler errors, otherwise the failure is impossible to act on
+    DKMS_MAKE_LOG="/var/lib/dkms/ravenna-alsa-lkm/${LKM_VERSION}/build/make.log"
+    if [[ -f "${DKMS_MAKE_LOG}" ]]; then
+      warn "last errors from ${DKMS_MAKE_LOG}:"
+      grep -E 'error:|Error [0-9]' "${DKMS_MAKE_LOG}" | tail -n 15 >&2 || \
+        tail -n 15 "${DKMS_MAKE_LOG}" >&2
+    fi
+    warn "the kernel may be too new for this driver release:"
+    warn "  uname -r -> $(uname -r)"
+    warn "build it by hand to iterate: cd ${LKM_DIR}/driver && make CC=clang"
+    warn "or pin an older kernel (the driver is known good on 6.6/6.8 LTS)"
   fi
   run dkms install -m ravenna-alsa-lkm -v "${LKM_VERSION}" --force || true
 
@@ -306,6 +320,20 @@ EOF
 MergingRavennaALSA
 EOF
   run modprobe MergingRavennaALSA || warn "modprobe MergingRavennaALSA failed"
+
+  # From kernel 6.15 the 1 ms audio tick is a soft hrtimer, which paces RTP in
+  # bursts instead of evenly (bondagit/ravenna-alsa-lkm issue 39).  Receivers with
+  # a small playout buffer can reject the stream; an LTS kernel uses the hard
+  # timer path for the same driver.
+  KERNEL_MM="$(uname -r | cut -d. -f1,2)"
+  KERNEL_MAJOR="${KERNEL_MM%%.*}"
+  KERNEL_MINOR="${KERNEL_MM##*.}"
+  if (( KERNEL_MAJOR > 6 )) || { (( KERNEL_MAJOR == 6 )) && (( KERNEL_MINOR >= 15 )); }; then
+    warn "kernel ${KERNEL_MM} runs the RAVENNA audio tick as a soft hrtimer: RTP is"
+    warn "  emitted in bursts (upstream issue 39). If remote endpoints reject or"
+    warn "  stutter on the stream, either use an LTS kernel (6.6/6.8) or raise"
+    warn "  aes67_daemon.sink_delay_samples and the endpoints' playout buffers."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -337,12 +365,38 @@ else
     install -m 0755 "${DAEMON_DIR}/build/aes67-daemon" "${PREFIX}/bin/aes67-daemon"
   fi
 
-  # the daemon repo ships its own installer for the unit, config and service user
-  if [[ -x "${DAEMON_DIR}/systemd/install.sh" ]]; then
-    run bash "${DAEMON_DIR}/systemd/install.sh" || warn "aes67-daemon unit install failed"
-  else
-    warn "aes67-daemon systemd/install.sh not found; install the unit manually"
+  # The daemon repo's own systemd/install.sh assumes a full ./build.sh layout
+  # (a webui/ dist, the binary at ../daemon/aes67-daemon) and uses paths relative
+  # to its own directory, so it fails when called from anywhere else.  Install
+  # exactly what the service needs instead.
+  log "installing the aes67-daemon service, config and scripts"
+  run getent group audio >/dev/null || run groupadd --system audio
+  run id aes67-daemon >/dev/null 2>&1 || run useradd --system -g audio -M -l \
+    -s /usr/sbin/nologin aes67-daemon -c "AES67 Linux daemon"
+  run install -d -o aes67-daemon -g audio /var/lib/aes67-daemon \
+    /usr/local/share/aes67-daemon/scripts /usr/local/share/aes67-daemon/webui
+  if [[ -f "${DAEMON_DIR}/daemon/scripts/ptp_status.sh" ]]; then
+    run install -m 0755 -o aes67-daemon -g audio \
+      "${DAEMON_DIR}/daemon/scripts/ptp_status.sh" \
+      /usr/local/share/aes67-daemon/scripts/
   fi
+  if [[ ${DRY_RUN} -eq 0 ]]; then
+    if [[ -f "${DAEMON_DIR}/systemd/daemon.conf" && ! -f "${DAEMON_CONFIG}" ]]; then
+      install -m 0644 -o aes67-daemon -g audio "${DAEMON_DIR}/systemd/daemon.conf" \
+        "${DAEMON_CONFIG}"
+    fi
+    if [[ -f "${DAEMON_DIR}/systemd/status.json" && ! -f /etc/status.json ]]; then
+      install -m 0644 -o aes67-daemon -g audio "${DAEMON_DIR}/systemd/status.json" \
+        /etc/status.json
+    fi
+  fi
+  if [[ -f "${DAEMON_DIR}/systemd/aes67-daemon.service" ]]; then
+    run install -m 0644 "${DAEMON_DIR}/systemd/aes67-daemon.service" \
+      /etc/systemd/system/aes67-daemon.service
+  else
+    warn "aes67-daemon.service not found under ${DAEMON_DIR}/systemd"
+  fi
+  run systemctl daemon-reload
 
   # Point the daemon at the real AES67 interface.  Its default config uses "lo",
   # which never receives PTP or RTP, so this is mandatory on a fresh install.
@@ -385,6 +439,17 @@ fi
 # 6. PJSIP (pjsua2) and the gateway itself
 # ---------------------------------------------------------------------------
 if [[ ${SKIP_GATEWAY} -eq 0 ]]; then
+  # The service user and group must exist before anything is installed with them
+  # (the configuration file is owned by group aes67-sip and the unit runs as it).
+  log "creating the aes67-sip service user and group"
+  run getent group aes67-sip >/dev/null || run groupadd --system aes67-sip
+  run id aes67-sip >/dev/null 2>&1 || run useradd --system --gid aes67-sip \
+    --home-dir /var/lib/aes67-sip --create-home --shell /usr/sbin/nologin aes67-sip
+  run usermod -aG audio aes67-sip || true
+  if [[ ${DRY_RUN} -eq 0 ]]; then
+    install -d -o aes67-sip -g aes67-sip /var/lib/aes67-sip
+  fi
+
   log "building PJSIP ${PJSIP_VERSION} (this takes several minutes on a Pi)"
   run env PJSIP_VERSION="${PJSIP_VERSION}" BUILD_JOBS="${JOBS}" \
     bash "${SRC_DIR}/scripts/build-pjsip.sh"
@@ -428,13 +493,6 @@ PY
       log "installed ${CONFIG_FILE} (set the SIP registrar/extensions before commissioning)"
     fi
   fi
-
-  # service user/group required by the unit (Group=aes67-sip, SupplementaryGroups=audio)
-  run getent group aes67-sip >/dev/null || run groupadd --system aes67-sip
-  run id aes67-sip >/dev/null 2>&1 || run useradd --system --gid aes67-sip \
-    --home-dir /var/lib/aes67-sip --create-home --shell /usr/sbin/nologin aes67-sip
-  run usermod -aG audio aes67-sip || true
-  run chown -R aes67-sip:aes67-sip /var/lib/aes67-sip || true
 
   run install -m 0644 "${SRC_DIR}/systemd/aes67-sip.service" "${SYSTEMD_UNIT}"
   run systemctl daemon-reload
