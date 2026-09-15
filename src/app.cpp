@@ -239,8 +239,9 @@ int App::run() {
 
   start_subsystems();
   if (!router_->running()) {
-    LOG_WARN("running without audio: the REST API and web UI stay available, "
-             "and the audio path is retried every 5 s");
+    LOG_WARN(
+        "running without audio: the REST API and web UI stay available, "
+        "and the audio path is retried every 5 s");
   }
 
   auto next_retry = std::chrono::steady_clock::now() + std::chrono::seconds(5);

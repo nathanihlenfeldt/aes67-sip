@@ -254,6 +254,19 @@ fi
 [[ ${DRY_RUN} -eq 1 ]] || [[ -f "${SRC_DIR}/CMakeLists.txt" ]] || die "checkout failed: ${SRC_DIR}"
 
 # ---------------------------------------------------------------------------
+# 3. real time tuning, PulseAudio, service user
+#
+# Must run before the kernel module is built/loaded: it sets the sysctls the
+# driver needs (igmp_max_memberships, rt throttling, perf_cpu_time_max_percent),
+# masks PulseAudio (it destabilises the RAVENNA device) and creates the service
+# user.
+# ---------------------------------------------------------------------------
+if [[ -x "${SRC_DIR}/scripts/setup-ravenna.sh" ]]; then
+  log "applying kernel/audio tuning and creating the service user"
+  run bash "${SRC_DIR}/scripts/setup-ravenna.sh"
+fi
+
+# ---------------------------------------------------------------------------
 # 4. Merging RAVENNA/AES67 kernel module, registered with DKMS
 # ---------------------------------------------------------------------------
 if [[ ${SKIP_KERNEL_MODULE} -eq 1 ]]; then
@@ -595,8 +608,31 @@ if [[ ${SKIP_DAEMON} -eq 0 ]]; then
   report_line "aes67-daemon" "${PTP:-unreachable on :8080}"
 fi
 if [[ ${SKIP_GATEWAY} -eq 0 ]]; then
-  GW="$(curl -fsS --max-time 3 http://127.0.0.1:8081/api/version 2>/dev/null || echo '')"
-  report_line "aes67-sip API" "${GW:-unreachable on :8081}"
+  # Give the service a few seconds to come up, then diagnose it if it does not.
+  GW=""
+  for _ in $(seq 1 12); do
+    GW="$(curl -fsS --max-time 2 http://127.0.0.1:8081/api/version 2>/dev/null || echo '')"
+    [[ -n "${GW}" ]] && break
+    sleep 1
+  done
+  if [[ -n "${GW}" ]]; then
+    report_line "aes67-sip API" "${GW}"
+    AUDIO_ERR="$(curl -fsS --max-time 2 http://127.0.0.1:8081/api/status 2>/dev/null |
+      python3 -c 'import json,sys; print(json.load(sys.stdin)["audio"].get("error",""))' \
+      2>/dev/null || echo '')"
+    if [[ -n "${AUDIO_ERR}" ]]; then
+      report_line "aes67-sip audio" "ERROR: ${AUDIO_ERR}"
+    else
+      report_line "aes67-sip audio" "running"
+    fi
+  else
+    report_line "aes67-sip API" "unreachable on :8081 - diagnosing:"
+    printf '    service: %s (%s)\n' "$(systemctl is-active aes67-sip 2>/dev/null)" \
+      "$(systemctl is-enabled aes67-sip 2>/dev/null)" >&2
+    journalctl -u aes67-sip -n 12 --no-pager 2>/dev/null |
+      sed 's/^/    /' >&2 || true
+    warn "run 'journalctl -u aes67-sip -n 40 --no-pager' for the full log"
+  fi
 fi
 report_line "interfaces" "$(ip -brief address show 2>/dev/null | awk '{print $1}' | tr '\n' ' ')"
 report_line "memory" "$(mem_total_mb) MB RAM, $(swap_total_mb) MB swap, ${JOBS} build job(s)"
@@ -618,11 +654,3 @@ Next steps
   4. Verify a line end to end with the commissioning test tone and the level meters
      before trusting the intercom path.
 EOF
-
-# ---------------------------------------------------------------------------
-# 3. real time tuning, PulseAudio, service user
-# ---------------------------------------------------------------------------
-if [[ -x "${SRC_DIR}/scripts/setup-ravenna.sh" ]]; then
-  log "applying kernel/audio tuning and creating the service user"
-  run bash "${SRC_DIR}/scripts/setup-ravenna.sh"
-fi
