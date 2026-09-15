@@ -11,6 +11,13 @@ add_executable(aes67-sip-tests
 target_link_libraries(aes67-sip-tests PRIVATE aes67-sip-core)
 target_compile_options(aes67-sip-tests PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
+# Same rpath as the gateway: the tests link the shared pjproject libraries.
+if(AES67_SIP_PJSIP_RPATH)
+  set_target_properties(aes67-sip-tests PROPERTIES
+    BUILD_RPATH "${AES67_SIP_PJSIP_RPATH}"
+    INSTALL_RPATH "${AES67_SIP_PJSIP_RPATH}")
+endif()
+
 add_test(NAME aes67-sip-tests COMMAND aes67-sip-tests)
 
 # The gateway can also be smoke tested end to end from the command line:

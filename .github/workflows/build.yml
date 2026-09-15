@@ -49,9 +49,15 @@ jobs:
 
       - name: Test
         working-directory: build
+        env:
+          # belt and braces: the binaries also carry an rpath, but this makes
+          # ctest work even if a runner ignores it
+          LD_LIBRARY_PATH: ${{ env.PJSIP_PREFIX }}/lib
         run: ctest --output-on-failure
 
       - name: Smoke test (fake devices)
+        env:
+          LD_LIBRARY_PATH: ${{ env.PJSIP_PREFIX }}/lib
         run: |
           ./build/aes67-sip --version
           ./build/aes67-sip -f -p 18081 -c config/aes67-sip.dev.conf &

@@ -169,11 +169,11 @@ if(PJSIP_AVAILABLE)
 
   # build-pjsip.sh builds pjproject as shared libraries inside the source tree,
   # so the binaries need an rpath to be runnable straight from the build tree.
+  # The directories are handed to the executable targets below (and to the test
+  # target in tests/CMakeLists.txt) through this cache variable.
   if(PJSIP_LINK_DIRS)
-    foreach(_pjsip_dir IN LISTS PJSIP_LINK_DIRS)
-      target_link_options(aes67-sip-core INTERFACE "-Wl,-rpath,${_pjsip_dir}")
-    endforeach()
-    unset(_pjsip_dir)
+    set(AES67_SIP_PJSIP_RPATH "${PJSIP_LINK_DIRS}" CACHE INTERNAL
+        "pjproject library directories to put on the binaries' rpath")
   endif()
 
   if(APPLE)
@@ -202,6 +202,14 @@ target_compile_options(aes67-sip-core PRIVATE -Wall -Wextra -Wno-unused-paramete
 add_executable(aes67-sip src/main.cpp)
 target_link_libraries(aes67-sip PRIVATE aes67-sip-core)
 target_compile_options(aes67-sip PRIVATE -Wall -Wextra)
+
+# Shared pjproject lives outside the default library path (third_party/), so the
+# binary needs an rpath to run from the build tree and after installation.
+if(AES67_SIP_PJSIP_RPATH)
+  set_target_properties(aes67-sip PROPERTIES
+    BUILD_RPATH "${AES67_SIP_PJSIP_RPATH}"
+    INSTALL_RPATH "${AES67_SIP_PJSIP_RPATH}")
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests

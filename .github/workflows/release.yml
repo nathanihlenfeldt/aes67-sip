@@ -50,6 +50,8 @@ jobs:
           npm run build
 
       - name: Build gateway
+        env:
+          LD_LIBRARY_PATH: ${{ env.PJSIP_PREFIX }}/lib
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
