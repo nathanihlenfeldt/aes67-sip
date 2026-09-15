@@ -193,28 +193,10 @@ int App::run() {
   sigaction(SIGTERM, &action, nullptr);
   signal(SIGPIPE, SIG_IGN);
 
-  // ---- audio -------------------------------------------------------------
-  if (!router_->start(&error)) {
-    LOG_ERROR("cannot start the audio path: ", error);
-    return 1;
-  }
-
-  // ---- SIP + lines -------------------------------------------------------
-  if (engine_ != nullptr) {
-    if (!engine_->start(&error)) {
-      LOG_ERROR("cannot start the SIP engine: ", error);
-      router_->stop();
-      return 1;
-    }
-  }
-  if (!lines_->apply_configuration(&error)) {
-    LOG_WARN("configuration applied with errors: ", error);
-  }
-  if (!lines_->start_supervision()) {
-    LOG_WARN("line supervision did not start");
-  }
-
   // ---- REST API ----------------------------------------------------------
+  // Started *before* the audio path and the SIP engine on purpose: the UI has to
+  // be reachable even when the RAVENNA device is missing or busy, so that it can
+  // report why.  A failed audio/SIP start no longer aborts the process.
   if (!api_->start(&error)) {
     LOG_ERROR("cannot start the REST API: ", error);
     lines_->stop();
@@ -228,8 +210,50 @@ int App::run() {
            config_.http_port, " (web UI served from /)");
   running_ = true;
 
+  // ---- audio + SIP, with retries -----------------------------------------
+  // Each attempt only (re)starts what is not running yet, so this is safe to
+  // call repeatedly: the audio device may appear later (kernel module loaded,
+  // PTP locked, another process released it).
+  bool configured = false;
+  auto start_subsystems = [&]() {
+    std::string local_error;
+    if (!router_->running() && !router_->start(&local_error)) {
+      LOG_ERROR("cannot start the audio path: ", local_error);
+      return;
+    }
+    if (engine_ != nullptr && !engine_->running() &&
+        !engine_->start(&local_error)) {
+      LOG_ERROR("cannot start the SIP engine: ", local_error);
+      return;
+    }
+    if (!configured) {
+      if (!lines_->apply_configuration(&local_error)) {
+        LOG_WARN("configuration applied with errors: ", local_error);
+      }
+      if (!lines_->start_supervision()) {
+        LOG_WARN("line supervision did not start");
+      }
+      configured = true;
+    }
+  };
+
+  start_subsystems();
+  if (!router_->running()) {
+    LOG_WARN("running without audio: the REST API and web UI stay available, "
+             "and the audio path is retried every 5 s");
+  }
+
+  auto next_retry = std::chrono::steady_clock::now() + std::chrono::seconds(5);
   while (!shutdown_requested()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    const bool subsystem_down =
+        !router_->running() || (engine_ != nullptr && !engine_->running());
+    if (subsystem_down && std::chrono::steady_clock::now() >= next_retry) {
+      LOG_INFO("retrying the audio path and the SIP engine");
+      start_subsystems();
+      next_retry = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    }
   }
   LOG_INFO("shutdown requested");
   shutdown();

@@ -102,6 +102,7 @@ json ApiServer::build_status() const {
   audio["channels"] = router_->format().channels;
   audio["period_frames"] = router_->format().period_frames;
   audio["state"] = router_->running() ? "running" : "stopped";
+  audio["error"] = router_->last_error();
   audio["rx_overruns"] = router_->backend_overruns();
   audio["tx_underruns"] = router_->backend_underruns();
   json channel_levels = json::array();

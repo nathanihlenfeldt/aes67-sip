@@ -70,7 +70,14 @@ bool AudioRouter::start(std::string* error) {
     return true;
   }
   if (!backend_->is_open() && !backend_->open(format_, error)) {
+    // Remember why: the gateway keeps running so the UI can explain it.
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_ = error != nullptr ? *error : "cannot open the audio device";
     return false;
+  }
+  {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_.clear();
   }
   stop_requested_ = false;
   running_ = true;
@@ -78,6 +85,11 @@ bool AudioRouter::start(std::string* error) {
   LOG_INFO("audio router started: ", backend_->detail(), ", ",
            format_.period_frames, " frames/period");
   return true;
+}
+
+std::string AudioRouter::last_error() const {
+  std::lock_guard<std::mutex> lock(error_mutex_);
+  return last_error_;
 }
 
 void AudioRouter::stop() {

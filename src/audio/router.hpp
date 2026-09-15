@@ -69,6 +69,9 @@ class AudioRouter {
   void stop();
   bool running() const { return running_.load(); }
 
+  /** Why the audio path is not running (empty when it is healthy). */
+  std::string last_error() const;
+
   // ---- control side (any non audio thread) -------------------------------
   void add_line(int line_id, const LineParams& params, unsigned sip_rate);
   void remove_line(int line_id);
@@ -182,6 +185,9 @@ class AudioRouter {
   std::thread thread_;
   std::atomic<bool> running_{false};
   std::atomic<bool> stop_requested_{false};
+
+  mutable std::mutex error_mutex_;
+  std::string last_error_;
 };
 
 }  // namespace aes67sip
