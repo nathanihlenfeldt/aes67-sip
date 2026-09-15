@@ -136,8 +136,8 @@ LineConfig line_from_json(const json& document) {
     line.aes67.remote_sdp = json_get<std::string>(a, "remote_sdp", "");
     line.aes67.ignore_refclk_gmid =
         json_get<bool>(a, "ignore_refclk_gmid", line.aes67.ignore_refclk_gmid);
-    line.aes67.refclk_ptp_traceable = json_get<bool>(
-        a, "refclk_ptp_traceable", line.aes67.refclk_ptp_traceable);
+    line.aes67.refclk_ptp_traceable =
+        json_get<bool>(a, "refclk_ptp_traceable", line.aes67.refclk_ptp_traceable);
   }
   if (json_has(document, "sip")) {
     const auto& s = document.at("sip");
