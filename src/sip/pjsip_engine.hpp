@@ -38,6 +38,9 @@ class SipCall;
  */
 class PjsipSipEngine : public SipEngine {
  public:
+  friend class SipCall;
+  friend class SipAccount;
+
   PjsipSipEngine(const SipConfig& config, SipEngineCallback* callback,
                  SipMediaSource* media);
   ~PjsipSipEngine() override;
@@ -52,7 +55,7 @@ class PjsipSipEngine : public SipEngine {
   std::vector<AccountStatus> account_status() const override;
 
   bool add_line(const LineConfig& line, std::string* error) override;
-  void remove_line(int line_id) override;
+  bool remove_line(int line_id) override;
 
   bool dial(int line_id, const std::string& target, std::string* error) override;
   bool answer(int line_id, std::string* error) override;
@@ -63,7 +66,8 @@ class PjsipSipEngine : public SipEngine {
   CallStatus call_status(int line_id) const override;
 
   // ---- called by SipAccount / SipCall (PJSIP threads) --------------------
-  void notify_reg_state(int line_id);
+  /** `code` is the SIP status of the registration (200 = ok). */
+  void notify_reg_state(int line_id, int code, const std::string& reason);
   void notify_call_state(int line_id, const pj::CallInfo& info);
   void notify_media_state(int line_id, const pj::CallInfo& info);
   void notify_incoming_call(int line_id, const std::string& remote_uri);
@@ -88,6 +92,9 @@ class PjsipSipEngine : public SipEngine {
   void post(std::function<void()> job);
   void runner(std::promise<std::string>* startup);
   LineContext* find(int line_id);
+  /** Creates/connects (or destroys) the AES67 media port of a line. */
+  void setup_line_media(int line_id);
+  void teardown_line_media(int line_id);
   void set_codec_priorities();
   std::string local_aor(const LineConfig& line) const;
   const SipAccountConfig* account_config(const std::string& id) const;
@@ -116,6 +123,13 @@ class PjsipSipEngine : public SipEngine {
   std::map<int, CallStatus> call_status_;
   std::map<int, AccountStatus> reg_status_;
   std::map<int, std::unique_ptr<PjsipAudioPort>> ports_;
+  /** Connect time per line, used to report the call duration. */
+  std::map<int, int64_t> call_connected_at_ms_;
+  /**
+   * Raw pointers to the accounts, so a callback thread can query registration
+   * state without touching `lines_` (which belongs to the pjsip thread).
+   */
+  std::map<int, SipAccount*> account_index_;
 
   pj::Endpoint endpoint_;
   std::thread runner_;

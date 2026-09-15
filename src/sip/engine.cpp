@@ -50,7 +50,8 @@ std::unique_ptr<SipEngine> SipEngine::create(const SipConfig& config,
     return std::make_unique<StubSipEngine>(config, callback, media);
   }
 #ifdef WITH_PJSIP
-  return std::make_unique<PjsipSipEngine>(config, callback, media, error);
+  (void)error;
+  return std::make_unique<PjsipSipEngine>(config, callback, media);
 #else
   if (error) {
     *error =

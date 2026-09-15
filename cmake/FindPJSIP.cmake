@@ -65,7 +65,6 @@ foreach(_pair "PJSUA2_LIBRARY;pjsua2" "PJSUA_LIBRARY;pjsua"
     endforeach()
   endif()
 endforeach()
-unset(_pjsip_lib_dirs)
 unset(_candidates)
 unset(_first)
 unset(_pair)
@@ -93,7 +92,13 @@ if(PJSIP_FOUND)
   if(PkgConfig_FOUND)
     pkg_check_modules(PC_PJSIP QUIET libpjproject)
     if(PC_PJSIP_FOUND)
-      set(_pjsip_link_libs ${PC_PJSIP_LIBRARIES})
+      # _LINK_LIBRARIES holds absolute paths, which is what a static pjproject
+      # build with version-suffixed archives needs (libpjsua2-<triple>.a).
+      set(_pjsip_link_libs ${PC_PJSIP_LINK_LIBRARIES})
+      if(NOT _pjsip_link_libs)
+        set(_pjsip_link_libs ${PC_PJSIP_LIBRARIES})
+      endif()
+      set(PJSIP_LINK_DIRS ${PC_PJSIP_LIBRARY_DIRS})
       set(PJSIP_INCLUDE_DIRS ${PC_PJSIP_INCLUDE_DIRS} ${PJSIP_INCLUDE_DIRS})
     endif()
   endif()
@@ -107,22 +112,39 @@ if(PJSIP_FOUND)
         ${PJSIP_LIBRARY}
         ${PJNATH_LIBRARY}
         ${PJ_LIBRARY})
-    foreach(_extra pjmedia-codec gsmcodec speex ilbccodec g7221codec resample srtp
-                   yuv webrtc)
-      find_library(PJSIP_EXTRA_${_extra} NAMES ${_extra}
-                   HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
-      if(PJSIP_EXTRA_${_extra})
-        list(APPEND _pjsip_link_libs ${PJSIP_EXTRA_${_extra}})
-      endif()
-    endforeach()
-    # system libraries a static pjproject build needs
-    foreach(_sys m dl)
-      find_library(PJSIP_SYS_${_sys} NAMES ${_sys})
-      if(PJSIP_SYS_${_sys})
-        list(APPEND _pjsip_link_libs ${PJSIP_SYS_${_sys}})
-      endif()
-    endforeach()
   endif()
+
+  # Codec / helper archives are appended for both paths: pkg-config files
+  # frequently omit some of them (Homebrew's libpjproject.pc leaves out
+  # libwebrtc, which libpjmedia's echo canceller needs).
+  foreach(_extra pjmedia-codec gsmcodec speex ilbccodec g7221codec resample srtp
+                 yuv webrtc)
+    find_library(PJSIP_EXTRA_${_extra} NAMES ${_extra}
+                 HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
+    if(NOT PJSIP_EXTRA_${_extra})
+      # Homebrew/cross builds use version-suffixed static archives
+      foreach(_dir ${_pjsip_lib_dirs})
+        file(GLOB _extra_candidates "${_dir}/lib${_extra}-*" "${_dir}/lib${_extra}.*")
+        if(_extra_candidates)
+          list(SORT _extra_candidates)
+          list(GET _extra_candidates 0 PJSIP_EXTRA_${_extra})
+          break()
+        endif()
+      endforeach()
+    endif()
+    if(PJSIP_EXTRA_${_extra})
+      list(APPEND _pjsip_link_libs ${PJSIP_EXTRA_${_extra}})
+    endif()
+  endforeach()
+  unset(_extra_candidates)
+
+  # system libraries a static pjproject build needs
+  foreach(_sys m dl)
+    find_library(PJSIP_SYS_${_sys} NAMES ${_sys})
+    if(PJSIP_SYS_${_sys})
+      list(APPEND _pjsip_link_libs ${PJSIP_SYS_${_sys}})
+    endif()
+  endforeach()
 
   set(PJSIP_LIBRARIES ${_pjsip_link_libs})
 
@@ -131,9 +153,12 @@ if(PJSIP_FOUND)
     set_target_properties(PJSIP::PJSUA2 PROPERTIES
       IMPORTED_LOCATION "${PJSUA2_LIBRARY}"
       INTERFACE_INCLUDE_DIRECTORIES "${PJSIP_INCLUDE_DIRS}"
-      INTERFACE_LINK_LIBRARIES "${PJSIP_LIBRARIES}")
+      INTERFACE_LINK_LIBRARIES "${PJSIP_LIBRARIES}"
+      INTERFACE_LINK_DIRECTORIES "${PJSIP_LINK_DIRS}")
   endif()
 endif()
 
 mark_as_advanced(PJSIP_INCLUDE_DIR PJSUA2_LIBRARY PJSUA_LIBRARY PJMEDIA_LIBRARY
                  PJSIP_LIBRARY PJNATH_LIBRARY PJ_LIBRARY)
+
+unset(_pjsip_lib_dirs)

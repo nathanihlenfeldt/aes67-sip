@@ -158,6 +158,15 @@ if(PJSIP_AVAILABLE)
     # declared for this processor".  All supported Apple CPUs are little endian.
     target_compile_definitions(aes67-sip-core PRIVATE
       PJ_IS_LITTLE_ENDIAN=1 PJ_IS_BIG_ENDIAN=0)
+    # The macOS pjproject binaries expect the system audio/network frameworks.
+    target_link_libraries(aes67-sip-core PRIVATE
+      "-framework CoreAudio"
+      "-framework AudioToolbox"
+      "-framework AudioUnit"
+      "-framework CoreFoundation"
+      "-framework CFNetwork"
+      "-framework Security"
+      "-framework SystemConfiguration")
   endif()
 endif()
 
