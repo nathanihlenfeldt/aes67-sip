@@ -104,6 +104,11 @@ export default function Dashboard() {
               {fmtInt(audio.tx_underruns, '0')}
             </span>
           </KV>
+          {audio.error ? (
+            <KV label="Error">
+              <span className="text-err">{audio.error}</span>
+            </KV>
+          ) : null}
         </Card>
 
         <Card title="PTP" subtitle={ptp.gmid || 'no grandmaster'}>

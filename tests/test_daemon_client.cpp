@@ -75,13 +75,20 @@ TEST_CASE(fake_daemon_stores_sinks_and_sources) {
 TEST_CASE(source_json_follows_the_daemon_schema) {
   const LineConfig line = make_line(1, {2});
   const json source = DaemonClient::make_source(fake_daemon_config(), line);
-  CHECK_EQ(source.at("codec"), json("L16"));
+  // L24 is the default payload: Dante and most AES67 devices use it.
+  CHECK_EQ(source.at("codec"), json("L24"));
   CHECK_EQ(source.at("map"), json({2}));
   CHECK_EQ(source.at("payload_type").get<int>(), 98);
   CHECK_EQ(source.at("ttl").get<int>(), 15);
   CHECK_EQ(source.at("name").get<std::string>(), std::string("Line 1"));
   CHECK(source.contains("enabled"));
   CHECK(!source.contains("map_extra"));
+
+  // the payload is configurable per line (older gear still wants L16)
+  LineConfig legacy = make_line(2, {3});
+  legacy.aes67.codec = "L16";
+  const json legacy_source = DaemonClient::make_source(fake_daemon_config(), legacy);
+  CHECK_EQ(legacy_source.at("codec"), json("L16"));
 }
 
 TEST_CASE(daemon_browse_and_sdp_endpoints) {

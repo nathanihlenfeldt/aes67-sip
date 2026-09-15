@@ -81,6 +81,24 @@ bool App::initialise(std::string* error) {
   LOG_INFO("aes67-sip ", version(), " (", build_info(), ") starting");
   LOG_INFO("configuration loaded from ", config_path_);
 
+  // The AES67 payload and the ALSA sample format are independent: an L24 payload
+  // fed from s16_le audio reaches the network with only 16 significant bits.
+  // Say so rather than letting it look like a 24 bit stream.
+  const std::string audio_format = to_lower(config_.audio.format);
+  if (audio_format == "s16_le" || audio_format == "s16le" ||
+      audio_format == "s16" || audio_format.empty()) {
+    for (const auto& line : config_.lines) {
+      if (line.enabled && line.aes67.codec == "L24") {
+        LOG_WARN(
+            "line ", line.id, ": aes67.codec is L24 but audio.format is ",
+            config_.audio.format,
+            " - the RTP payload carries 24 bit words with the low 8 bits zero; "
+            "set audio.format to s24_3le (or s32_le) for full resolution");
+        break;
+      }
+    }
+  }
+
   // ---- AES67 daemon ------------------------------------------------------
   daemon_ = DaemonClient::create(config_.aes67_daemon);
 

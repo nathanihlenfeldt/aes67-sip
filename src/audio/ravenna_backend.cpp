@@ -67,13 +67,36 @@ bool RavennaAudioBackend::open(const AudioFormat& format, std::string* error) {
     format_.period_frames = 48;
   }
 
-  if (!open_stream(SND_PCM_STREAM_CAPTURE, &capture_, error)) {
-    close();
-    return false;
-  }
-  if (!open_stream(SND_PCM_STREAM_PLAYBACK, &playback_, error)) {
-    close();
-    return false;
+  const auto open_both = [this](std::string* open_error) {
+    if (!open_stream(SND_PCM_STREAM_CAPTURE, &capture_, open_error)) {
+      close();
+      return false;
+    }
+    if (!open_stream(SND_PCM_STREAM_PLAYBACK, &playback_, open_error)) {
+      close();
+      return false;
+    }
+    return true;
+  };
+
+  std::string first_error;
+  if (!open_both(&first_error)) {
+    // The driver may not accept the configured sample format (3 byte formats are
+    // not available everywhere).  Fall back to 16 bit rather than leaving the
+    // appliance without audio, and say so - the AES67 payload stays L24 either
+    // way, only the resolution of the ALSA side changes.
+    if (pcm_format_ == SND_PCM_FORMAT_S16_LE) {
+      if (error != nullptr) {
+        *error = first_error;
+      }
+      return false;
+    }
+    LOG_WARN("the RAVENNA device rejected audio.format '", config_.format, "' (",
+             first_error, "); retrying with s16_le (16 bit resolution)");
+    pcm_format_ = SND_PCM_FORMAT_S16_LE;
+    if (!open_both(error)) {
+      return false;
+    }
   }
 
   const size_t raw_bytes =

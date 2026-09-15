@@ -217,6 +217,7 @@ ensure_swap
 # ---------------------------------------------------------------------------
 BASE_PACKAGES=(
   build-essential clang cmake ninja-build git curl ca-certificates pkg-config bc
+  python3
   libasound2-dev alsa-utils linuxptp libssl-dev
   libavahi-client-dev libsystemd-dev libboost-all-dev
   dkms iproute2 net-tools

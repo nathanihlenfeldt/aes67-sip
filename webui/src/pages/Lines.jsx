@@ -91,6 +91,7 @@ function LineEditor({ line, config, onSave, onCall, onReload, busy }) {
       ptt: config?.ptt ?? line.ptt ?? false,
       gain_db: num(config?.gain_db, num(line.gain_db, 0)),
       channelsText: channels.join(', '),
+      codec: cfgAes.codec || 'L24',
       sink_id: cfgAes.sink_id ?? liveAes.sink_id ?? 0,
       source_id: cfgAes.source_id ?? liveAes.source_id ?? 0,
       dial_target: cfgSip.dial_target ?? liveCall.remote_uri ?? '',
@@ -125,6 +126,7 @@ function LineEditor({ line, config, onSave, onCall, onReload, busy }) {
       gain_db: gain,
       aes67: {
         channels: parsed.channels,
+        codec: form.codec,
         sink_id: pair.sink_id,
         source_id: pair.source_id,
       },
@@ -187,6 +189,30 @@ function LineEditor({ line, config, onSave, onCall, onReload, busy }) {
       </Section>
 
       <Section title="AES67 channel mapping">
+        {liveAes.sdp_source ? (
+          <div className={`hint ${liveAes.sdp_source === 'loopback' || liveAes.sdp_source === 'none' ? 'text-err' : ''}`}>
+            endpoint stream: <strong>{liveAes.sdp_source}</strong>
+            {liveAes.sdp_source === 'loopback'
+              ? ' - the sink is subscribed to our own source, so no endpoint audio is bridged. Pick a discovered source below or paste the endpoint SDP.'
+              : ''}
+            {liveAes.sdp_source === 'none'
+              ? ' - no sink SDP configured; this line is not receiving from site.'
+              : ''}
+          </div>
+        ) : null}
+        <div className="field-row">
+          <label className="field">
+            <span className="field-label">payload (our source)</span>
+            <select className="input" value={form.codec} onChange={(e) => set({ codec: e.target.value })}>
+              <option value="L24">L24 (Dante, 24 bit)</option>
+              <option value="L16">L16 (16 bit, legacy)</option>
+              <option value="L2432">L2432 (24 bit in 32 bit words)</option>
+              <option value="AM824">AM824</option>
+              <option value="L32">L32</option>
+            </select>
+          </label>
+        </div>
+
         <div className="field-row">
           <label className="field">
             <span className="field-label">channels (comma separated)</span>

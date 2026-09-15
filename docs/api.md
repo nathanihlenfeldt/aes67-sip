@@ -42,6 +42,7 @@ Single poll endpoint used by the UI.
     "channels": 16,
     "period_frames": 48,
     "state": "running",
+    "error": "",
     "rx_overruns": 0,
     "tx_underruns": 0,
     "levels_dbfs": [-60.0, -12.3, "-inf", 0.0]
@@ -79,8 +80,10 @@ Single poll endpoint used by the UI.
       "state_code": 200,
       "call": { "remote_uri": "sip:1001@pbx.example.com", "duration_sec": 42,
                 "last_error": "" },
-      "aes67": { "sink_id": 0, "source_id": 0, "channels": [0, 1], "receiving": true },
-      "levels": { "rx_dbfs": -18.2, "tx_dbfs": -60.0 },
+      "aes67": { "sink_id": 0, "source_id": 0, "channels": [0], "receiving": true,
+                 "error": false, "sdp_source": "discovered" },
+      "levels": { "rx_dbfs": -18.2, "tx_dbfs": -60.0,
+                  "sip_rx_dbfs": -22.0, "sip_tx_dbfs": -18.2 },
       "gain_db": 0.0,
       "mute": false,
       "ptt": false
@@ -91,6 +94,21 @@ Single poll endpoint used by the UI.
 
 `state` is one of `disabled`, `idle`, `dialing`, `ringing`, `in_call`, `error`.
 Levels are dBFS floats; silence is serialised as `null`.
+
+`audio.error` is empty while the audio path is healthy. When the RAVENNA device
+cannot be opened it holds the reason and `audio.state` is `stopped`; the gateway
+keeps serving this API (and retries the audio path every 5 s) instead of exiting,
+so the UI stays usable while the audio problem is diagnosed.
+
+`sip.accounts[].code` is the SIP status of the last registration: `200`
+registered, `401` credentials rejected, `403` refused by the PBX, `408` no answer,
+`502` the registrar name could not be resolved. `sip.accounts[].error` keeps the
+reason of the last failure (it is not cleared by a later empty update).
+
+`aes67.sdp_source` says where the line's sink SDP came from: `pasted` (from
+`aes67.remote_sdp`) or `discovered` (from SAP/mDNS) bridge the real endpoint;
+`loopback` means the sink is subscribed to our own source - a commissioning aid
+that receives no endpoint audio; `none` means no sink was created.
 
 Level directions: `rx_dbfs` / `tx_dbfs` are measured at the **AES67 (on site)
 side** of the gateway - `rx_dbfs` is what the intercom endpoint sends us,
@@ -120,8 +138,12 @@ and is refreshed every 2 s, `aes67.error` aggregates the RTP error flags
 ```json
 { "enabled": true, "gain_db": -3.0, "mute": false, "ptt": false,
   "sip": { "call_mode": "ptt", "dial_target": "1001" },
-  "aes67": { "channels": [2, 3] } }
+  "aes67": { "channels": [2, 3], "codec": "L24" } }
 ```
+
+`aes67.codec` is the RTP payload our *source* advertises: `L24` (default, Dante
+and most AES67 devices), `L16`, `L2432`, `AM824` or `L32`. The sink's payload is
+not configurable here because it comes from the endpoint's SDP.
 
 `POST /api/lines/{id}/call` body:
 

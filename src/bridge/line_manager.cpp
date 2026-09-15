@@ -192,7 +192,8 @@ void LineManager::configure_daemon_streams(const LineConfig& line) {
   json sink;
   std::string sdp_error;
   std::string sdp_origin;
-  const std::string remote_sdp = resolve_endpoint_sdp(line, &sdp_origin, &sdp_error);
+  const std::string remote_sdp =
+      resolve_endpoint_sdp(line, &sdp_origin, &sdp_error);
   {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = lines_.find(line.id);
@@ -492,25 +493,25 @@ json LineManager::line_status(int line_id) const {
   LineState state = LineState::kIdle;
   int state_code = 0;
   std::string detail;
-    bool receiving = false;
-    bool sink_error = false;
-    std::string sdp_source{"none"};
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      const auto it = lines_.find(line_id);
-      if (it == lines_.end()) {
-        return nullptr;
-      }
-      const LineRuntime& line = *it->second;
-      call = engine_ != nullptr ? engine_->call_status(line_id) : CallStatus{};
-      config = line.config;
-      state = line.state;
-      state_code = line.state_code;
-      detail = line.detail;
-      receiving = line.sink_receiving;
-      sink_error = line.sink_error;
-      sdp_source = line.sdp_source;
+  bool receiving = false;
+  bool sink_error = false;
+  std::string sdp_source{"none"};
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = lines_.find(line_id);
+    if (it == lines_.end()) {
+      return nullptr;
     }
+    const LineRuntime& line = *it->second;
+    call = engine_ != nullptr ? engine_->call_status(line_id) : CallStatus{};
+    config = line.config;
+    state = line.state;
+    state_code = line.state_code;
+    detail = line.detail;
+    receiving = line.sink_receiving;
+    sink_error = line.sink_error;
+    sdp_source = line.sdp_source;
+  }
 
   const AudioRouter::LineMeters meters = router_->meters(line_id);
 
@@ -847,6 +848,15 @@ json LineManager::self_test() {
     const std::string sdp_source =
         json_get_path<std::string>(status, {"aes67", "sdp_source"}, "none");
 
+    // Only expect an endpoint SDP when this gateway is supposed to create the
+    // streams: a line with auto_create_streams=false is wired up by hand and must
+    // not be reported as broken.
+    const LineConfig* line_config = config_->find_line(id);
+    const bool expects_endpoint_sdp = line_config != nullptr &&
+                                      line_config->enabled &&
+                                      line_config->aes67.auto_create_streams &&
+                                      config_->aes67_daemon.auto_configure;
+
     std::ostringstream detail;
     detail << state;
     if (enabled && !receiving) {
@@ -867,9 +877,10 @@ json LineManager::self_test() {
                << " dBFS";
       }
     }
-    const bool loopback_only = sdp_source == "loopback" || sdp_source == "none";
-    const bool dead_bridge = enabled && state == "in_call" &&
-                             capture < -999.0 && sip_in < -999.0;
+    const bool loopback_only =
+        expects_endpoint_sdp && (sdp_source == "loopback" || sdp_source == "none");
+    const bool dead_bridge =
+        enabled && state == "in_call" && capture < -999.0 && sip_in < -999.0;
     add("line " + std::to_string(id) + " (" +
             json_get<std::string>(status, "name", "") + ")",
         !enabled || (state != "error" && !loopback_only && !dead_bridge),

@@ -413,7 +413,7 @@ json DaemonClient::make_source(const Aes67DaemonConfig& daemon_config,
   return json{{"enabled", line.enabled},
               {"name", line.aes67.stream_name},
               {"io", "Audio Device"},
-              {"codec", "L16"},
+              {"codec", line.aes67.codec},
               {"address", ""},  // let the daemon pick from its multicast base
               {"max_samples_per_packet", 48},
               {"ttl", daemon_config.source_ttl},

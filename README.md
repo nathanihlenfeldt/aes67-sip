@@ -18,7 +18,7 @@ push-to-talk. Audio is 4-wire and continuous; a call, once up, stays up.
 
 ```
   4-wire intercom endpoints          Raspberry Pi appliance                off-site
-  ┌──────────────────────┐    AES67 / L16 48k multicast    ┌──────────────────────┐
+  ┌──────────────────────┐    AES67 / L24 48k multicast    ┌──────────────────────┐
   │ panels: send+receive │ ──────────────────────────────► │ RAVENNA ALSA device  │
   └──────────────────────┘ ◄────────────────────────────── │ aes67-daemon  :8080  │
                                                            │ aes67-sip     :8081  │
@@ -90,8 +90,18 @@ intercom use case:
   - `auto_answer` - answer inbound calls only. `dial_out` - dial out only.
   - `manual` - operator dials from the UI. `ptt` - legacy energy-triggered mode.
 - One AES67 **channel per line** (`aes67.channels: [n]`) and one call per channel.
+- `aes67.codec` is the RTP payload our **source** advertises: **`L24` by default**
+  (Dante and most AES67 devices), or `L16`/`L2432`/`AM824`/`L32`. The sink's payload
+  isn't configured here - it comes from the endpoint's SDP.
+- `audio.format` is the ALSA sample format on the RAVENNA device: **`s24_3le` by
+  default**, which preserves the 24 bit resolution of an L24 stream. If the driver
+  refuses it the backend falls back to `s16_le` (16 bit, the low bits of the L24
+  words stay zero) and says so in the log.
 - `aes67.remote_source_id` (or `remote_sdp`) selects the *endpoint's* stream for the
   sink; leave `remote_source_id` empty and pick it in the UI from SAP/mDNS discovery.
+  If neither is set the sink falls back to a **commissioning loopback** (our own
+  source): `status.lines[].aes67.sdp_source` reports `loopback` and the self-test
+  fails that line, because no endpoint audio is being bridged.
 - `aes67.ignore_refclk_gmid` skips the daemon's PTP grandmaster check on the SDP - only
   needed when an endpoint advertises a different grandmaster than the locked one.
 

@@ -20,8 +20,8 @@ struct AudioConfig {
   unsigned channels{16};        // channels opened on the RAVENNA device
   unsigned period_frames{48};   // 1 ms at 48 kHz, matches the daemon
   unsigned periods{8};
-  std::string format{"s16_le"};  // s16_le | s24_3le | s32_le
-  double null_tone_hz{0.0};      // null backend test tone (0 = silence)
+  std::string format{"s24_3le"};  // s16_le | s24_3le | s32_le
+  double null_tone_hz{0.0};       // null backend test tone (0 = silence)
 
   AudioBackendKind backend_kind() const;
   PcmFormat pcm_format() const;
@@ -75,6 +75,13 @@ struct LineAes67Config {
   std::vector<unsigned> channels{0, 1};
   std::string stream_name;  // defaults to the line name
   bool auto_create_streams{true};
+  /**
+   * RTP payload our *source* advertises: L24 (default) or L16.  Dante and most
+   * modern AES67 devices use L24, which is also the aes67-daemon's own default.
+   * The sink's payload is not configurable here: it comes from the endpoint's
+   * SDP.  Supported values: L16, L24, L2432, AM824, L32.
+   */
+  std::string codec{"L24"};
   /**
    * Where the *endpoint's* stream description comes from: the sink has to
    * describe the intercom endpoint's RTP stream, so it is either taken from a

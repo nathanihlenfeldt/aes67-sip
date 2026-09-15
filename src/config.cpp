@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <utility>
 
 #include "log.hpp"
 
@@ -43,6 +44,7 @@ json line_to_json(const LineConfig& line) {
              {"channels", line.aes67.channels},
              {"stream_name", line.aes67.stream_name},
              {"auto_create_streams", line.aes67.auto_create_streams},
+             {"codec", line.aes67.codec},
              {"remote_source_id", line.aes67.remote_source_id},
              {"remote_sdp", line.aes67.remote_sdp},
              {"ignore_refclk_gmid", line.aes67.ignore_refclk_gmid}};
@@ -82,6 +84,31 @@ void apply_line_defaults(LineConfig* line) {
   if (line->aes67.channels.empty()) {
     line->aes67.channels = {0, 1};
   }
+
+  // RTP payload of our source: L24 for Dante/most AES67 devices, L16 for older
+  // gear.  Anything else is rejected rather than silently sent to the daemon,
+  // which would leave the stream misconfigured.
+  const std::string requested = to_lower(trim(line->aes67.codec));
+  static const std::pair<const char*, const char*> kCodecs[] = {{"l16", "L16"},
+                                                                {"l24", "L24"},
+                                                                {"l2432", "L2432"},
+                                                                {"am824", "AM824"},
+                                                                {"l32", "L32"}};
+  std::string canonical;
+  for (const auto& entry : kCodecs) {
+    if (requested == entry.first) {
+      canonical = entry.second;
+      break;
+    }
+  }
+  if (canonical.empty()) {
+    if (!requested.empty()) {
+      LOG_WARN("line ", line->id, ": unknown aes67.codec '", line->aes67.codec,
+               "' (supported: L16, L24, L2432, AM824, L32), using L24");
+    }
+    canonical = "L24";
+  }
+  line->aes67.codec = canonical;
 }
 
 LineConfig line_from_json(const json& document) {
@@ -103,6 +130,7 @@ LineConfig line_from_json(const json& document) {
     line.aes67.stream_name = json_get<std::string>(a, "stream_name", "");
     line.aes67.auto_create_streams =
         json_get<bool>(a, "auto_create_streams", line.aes67.auto_create_streams);
+    line.aes67.codec = json_get<std::string>(a, "codec", line.aes67.codec);
     line.aes67.remote_source_id = json_get<std::string>(a, "remote_source_id", "");
     line.aes67.remote_sdp = json_get<std::string>(a, "remote_sdp", "");
     line.aes67.ignore_refclk_gmid =

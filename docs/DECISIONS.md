@@ -44,6 +44,7 @@ It is not a softphone for a human: there is no handset, no ring tone, no PTT.
 | 10 | **GPL-3.0** (PJSIP is GPLv2+, aes67-daemon is GPLv3) | `LICENSE` |
 | 11 | 8 lines / 8 RAVENNA channels to start, expandable | `config/aes67-sip.conf`; the daemon supports up to 64 |
 | 12 | **No echo cancellation**, gateway latency target <30 ms | Endpoints and PBX side own their echo; AEC is out of scope |
+| 13 | **AES67 payload is L24** (24 bit linear), for Dante interoperability | `aes67.codec` per line, default `L24`; the ALSA side runs `s24_3le` by default so the 24 bits are real, with an automatic `s16_le` fallback; the sink's payload comes from the endpoint's SDP |
 
 ## Audio path and levels
 
