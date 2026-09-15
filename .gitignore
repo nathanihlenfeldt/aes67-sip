@@ -1,0 +1,26 @@
+# build artefacts
+build/
+build-*/
+out/
+cmake-build-*/
+
+# third party checkouts / installs
+third_party/pjproject/
+third_party/pjsip-install/
+
+# web ui
+webui/node_modules/
+webui/dist/
+npm-debug.log*
+
+# runtime artefacts
+*.log
+status.json
+config/status.json
+
+# editor / os
+.DS_Store
+.vscode/
+.idea/
+*.swp
+compile_commands.json

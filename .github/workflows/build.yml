@@ -1,0 +1,119 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PJSIP_VERSION: "2.17"
+  PJSIP_PREFIX: ${{ github.workspace }}/third_party/pjsip-install
+
+jobs:
+  linux:
+    name: build (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo ./scripts/install-deps.sh
+
+      - name: Cache PJSIP
+        id: pjsip-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PJSIP_PREFIX }}
+          key: pjsip-${{ env.PJSIP_VERSION }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-pjsip.sh') }}
+
+      - name: Build PJSIP (pjsua2)
+        run: ./scripts/build-pjsip.sh
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DWITH_PJSIP=ON -DWITH_ALSA=ON -DWITH_TESTS=ON \
+            -DPJSIP_ROOT="${PJSIP_PREFIX}"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Smoke test (fake devices)
+        run: |
+          ./build/aes67-sip --version
+          ./build/aes67-sip -f -p 18081 -c config/aes67-sip.dev.conf &
+          GATEWAY=$!
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18081/api/status > /tmp/status.json; then break; fi
+            sleep 0.25
+          done
+          curl -fsS http://127.0.0.1:18081/api/status | head -40
+          curl -fsS http://127.0.0.1:18081/api/lines
+          kill "$GATEWAY"
+
+      - name: Install to staging
+        run: |
+          DESTDIR="${GITHUB_WORKSPACE}/staging" cmake --install build --prefix /usr/local
+          find staging -type f | sort
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: aes67-sip-${{ matrix.runner }}
+          path: |
+            build/aes67-sip
+            build/compile_commands.json
+          if-no-files-found: error
+
+  webui:
+    name: webui
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Install
+        working-directory: webui
+        run: npm ci
+      - name: Build
+        working-directory: webui
+        run: npm run build
+      - name: Bundle size report
+        working-directory: webui
+        run: du -sh dist && find dist -type f -exec ls -l {} \;
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webui-dist
+          path: webui/dist
+          if-no-files-found: error
+
+  formatting:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting of src/
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-format
+          find src tests -name '*.hpp' -o -name '*.cpp' > /tmp/sources.txt
+          if ! clang-format --dry-run --Werror $(cat /tmp/sources.txt); then
+            echo "::error::run clang-format -i on the files listed above"
+            exit 1
+          fi
