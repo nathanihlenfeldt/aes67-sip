@@ -43,11 +43,14 @@ PACKAGES=(
 
 echo "==> installing build dependencies: ${PACKAGES[*]}"
 $SUDO apt-get update -qq
-$SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${PACKAGES[@]}"
+# `env` is required here: some sudo policies (e.g. GitHub runners) reject the
+# `sudo VAR=value command` form and try to execute the assignment as a command.
+$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${PACKAGES[@]}"
 
 # Kernel headers are needed to build the Merging RAVENNA/AES67 LKM on site.
 if [[ -n "${INSTALL_KERNEL_HEADERS:-}" ]]; then
-  $SUDO apt-get install -y -qq "linux-headers-$(uname -r)"
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    "linux-headers-$(uname -r)"
 fi
 
 echo "==> done. Next: ./scripts/build-pjsip.sh"
