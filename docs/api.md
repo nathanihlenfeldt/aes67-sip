@@ -107,8 +107,11 @@ reason of the last failure (it is not cleared by a later empty update).
 
 `aes67.sdp_source` says where the line's sink SDP came from: `pasted` (from
 `aes67.remote_sdp`) or `discovered` (from SAP/mDNS) bridge the real endpoint;
-`loopback` means the sink is subscribed to our own source - a commissioning aid
-that receives no endpoint audio; `none` means no sink was created.
+`loopback` means `aes67.commissioning_loopback` is on and the sink is subscribed
+to our own source - a bench aid that receives no endpoint audio; `unmanaged` means
+no endpoint SDP is configured so the gateway leaves the sink alone (it may have
+been wired up in Dante Controller, Q-SYS or the daemon UI); `none` means there is
+no sink at all.
 
 Level directions: `rx_dbfs` / `tx_dbfs` are measured at the **AES67 (on site)
 side** of the gateway - `rx_dbfs` is what the intercom endpoint sends us,
@@ -144,6 +147,8 @@ and is refreshed every 2 s, `aes67.error` aggregates the RTP error flags
 `aes67.codec` is the RTP payload our *source* advertises: `L24` (default, Dante
 and most AES67 devices), `L16`, `L2432`, `AM824` or `L32`. The sink's payload is
 not configurable here because it comes from the endpoint's SDP.
+`aes67.commissioning_loopback` (default `false`) subscribes the sink to our own
+source for bench testing when no endpoint SDP is configured.
 
 `POST /api/lines/{id}/call` body:
 

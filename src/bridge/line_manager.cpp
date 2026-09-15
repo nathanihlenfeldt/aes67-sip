@@ -138,13 +138,26 @@ std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
   //    commissioned with the test tone before the endpoints are wired up, but it
   //    must be loud: the gateway would otherwise appear healthy while receiving
   //    nothing from site.
+  if (!line.aes67.commissioning_loopback) {
+    // Nothing to program.  Do NOT touch the sink: it may have been wired up on
+    // purpose (Dante Controller, Q-SYS, the daemon UI) and overwriting it with a
+    // loopback would silently break a working installation.
+    LOG_WARN("line ", line.id,
+             ": no endpoint SDP configured (aes67.remote_source_id or "
+             "aes67.remote_sdp) - leaving the daemon sink ",
+             line.aes67.sink_id,
+             " as it is (set aes67.commissioning_loopback to loop our own source "
+             "back for bench testing)");
+    set_origin("unmanaged");
+    return {};
+  }
+
   std::string own_sdp;
   std::string sdp_error;
   if (daemon_->get_source_sdp(line.aes67.source_id, &own_sdp, &sdp_error)) {
     LOG_WARN("line ", line.id,
-             ": no endpoint SDP configured (aes67.remote_source_id or "
-             "aes67.remote_sdp): the sink subscribes to our OWN source, so no "
-             "endpoint audio is bridged - this is a commissioning loopback only");
+             ": commissioning_loopback is on: the sink subscribes to our OWN "
+             "source, so no endpoint audio is bridged");
     set_origin("loopback");
     return own_sdp;
   }
@@ -320,6 +333,27 @@ void LineManager::supervise() {
     const bool poll_sinks = now - last_sink_poll_ms >= kSinkPollIntervalMs;
     if (poll_sinks) {
       last_sink_poll_ms = now;
+
+      // Refresh the sink SDP map and our own node id: together they let the
+      // status tell "our own source" (commissioning loopback) from a sink that
+      // is really bridging an endpoint, however it was configured.
+      json sinks;
+      std::string sink_error;
+      if (daemon_->get_sinks(&sinks, &sink_error) && sinks.contains("sinks") &&
+          sinks.at("sinks").is_array()) {
+        std::lock_guard<std::mutex> lock(sink_sdp_mutex_);
+        sink_sdps_.clear();
+        for (const auto& entry : sinks.at("sinks")) {
+          sink_sdps_[json_get<int>(entry, "id", -1)] =
+              json_get<std::string>(entry, "sdp", "");
+        }
+      }
+      if (own_node_id_.empty()) {
+        json daemon_config;
+        if (daemon_->get_config(&daemon_config, &sink_error)) {
+          own_node_id_ = json_get<std::string>(daemon_config, "node_id", "");
+        }
+      }
     }
 
     // Snapshot the lines first: `mutex_` must never be held while calling into
@@ -344,10 +378,33 @@ void LineManager::supervise() {
         std::string error;
         const bool ok =
             daemon_->get_sink_status(line.config.aes67.sink_id, &sink, &error);
+
+        // The sink may also have been wired up directly on the AES67 page (or by
+        // another tool).  If its SDP is not our own source's, it is bridging a
+        // real endpoint - do not keep warning about a commissioning loopback.
+        std::string sink_sdp;
+        {
+          std::lock_guard<std::mutex> lock(sink_sdp_mutex_);
+          const auto it = sink_sdps_.find(line.config.aes67.sink_id);
+          if (it != sink_sdps_.end()) {
+            sink_sdp = it->second;
+          }
+        }
+
         std::lock_guard<std::mutex> lock(line.mutex);
         line.sink_receiving = ok && sink.receiving_rtp_packet;
         line.sink_error = ok && (sink.rtp_seq_id_error || sink.rtp_ssrc_error ||
                                  sink.rtp_payload_type_error || sink.rtp_sac_error);
+        if (!sink_sdp.empty()) {
+          const bool is_our_own = !own_node_id_.empty() &&
+                                  sink_sdp.find(own_node_id_) != std::string::npos;
+          if (!is_our_own) {
+            line.sdp_source = "external";
+          } else if (line.sdp_source != "pasted" &&
+                     line.sdp_source != "discovered") {
+            line.sdp_source = "loopback";
+          }
+        }
       }
 
       if (!line.config.enabled) {
@@ -868,7 +925,9 @@ json LineManager::self_test() {
     if (enabled) {
       detail << ", endpoint sdp: " << sdp_source;
       if (sdp_source == "loopback") {
-        detail << " (our own source: no endpoint is bridged)";
+        detail << " (commissioning loopback: no endpoint audio is bridged)";
+      } else if (sdp_source == "unmanaged") {
+        detail << " (sink managed outside the gateway: Dante/Q-SYS/daemon UI)";
       }
       if (state == "in_call") {
         detail << ", sip in "
@@ -877,13 +936,17 @@ json LineManager::self_test() {
                << " dBFS";
       }
     }
-    const bool loopback_only =
-        expects_endpoint_sdp && (sdp_source == "loopback" || sdp_source == "none");
+    // Judge the line on what is observable rather than on the configured mode:
+    // an error state, a call that is silent in both directions, or an endpoint
+    // that should be streaming (discovered/pasted SDP) but is not.
     const bool dead_bridge =
         enabled && state == "in_call" && capture < -999.0 && sip_in < -999.0;
+    const bool endpoint_silent =
+        expects_endpoint_sdp &&
+        (sdp_source == "discovered" || sdp_source == "pasted") && !receiving;
     add("line " + std::to_string(id) + " (" +
             json_get<std::string>(status, "name", "") + ")",
-        !enabled || (state != "error" && !loopback_only && !dead_bridge),
+        !enabled || (state != "error" && !dead_bridge && !endpoint_silent),
         detail.str());
   }
 

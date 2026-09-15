@@ -99,9 +99,10 @@ intercom use case:
   words stay zero) and says so in the log.
 - `aes67.remote_source_id` (or `remote_sdp`) selects the *endpoint's* stream for the
   sink; leave `remote_source_id` empty and pick it in the UI from SAP/mDNS discovery.
-  If neither is set the sink falls back to a **commissioning loopback** (our own
-  source): `status.lines[].aes67.sdp_source` reports `loopback` and the self-test
-  fails that line, because no endpoint audio is being bridged.
+  With neither set the gateway **leaves the sink alone** (`aes67.sdp_source:
+  "unmanaged"`) - it may have been wired up in Dante Controller/Q-SYS and must not be
+  overwritten. `aes67.commissioning_loopback: true` opts into subscribing the sink to
+  our own source instead, for bench testing without endpoints.
 - `aes67.ignore_refclk_gmid` skips the daemon's PTP grandmaster check on the SDP - only
   needed when an endpoint advertises a different grandmaster than the locked one.
 

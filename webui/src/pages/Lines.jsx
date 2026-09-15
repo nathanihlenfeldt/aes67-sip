@@ -190,10 +190,13 @@ function LineEditor({ line, config, onSave, onCall, onReload, busy }) {
 
       <Section title="AES67 channel mapping">
         {liveAes.sdp_source ? (
-          <div className={`hint ${liveAes.sdp_source === 'loopback' || liveAes.sdp_source === 'none' ? 'text-err' : ''}`}>
+          <div className={`hint ${liveAes.sdp_source === 'loopback' ? 'text-err' : ''}`}>
             endpoint stream: <strong>{liveAes.sdp_source}</strong>
             {liveAes.sdp_source === 'loopback'
-              ? ' - the sink is subscribed to our own source, so no endpoint audio is bridged. Pick a discovered source below or paste the endpoint SDP.'
+              ? ' - the sink is subscribed to our own source (commissioning loopback), so no endpoint audio is bridged.'
+              : ''}
+            {liveAes.sdp_source === 'unmanaged'
+              ? ' - the sink is managed outside the gateway (Dante Controller, Q-SYS or the daemon UI); set aes67.remote_source_id to let the gateway manage it.'
               : ''}
             {liveAes.sdp_source === 'none'
               ? ' - no sink SDP configured; this line is not receiving from site.'

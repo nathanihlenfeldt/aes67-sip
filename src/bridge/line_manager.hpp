@@ -131,6 +131,12 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
   AudioRouter* router_{nullptr};
   SipEngine* engine_{nullptr};
 
+  /** Our own daemon's node_id: a sink SDP carrying it is our own source. */
+  std::string own_node_id_;
+  /** sink id -> SDP, refreshed by the sink poll (see supervise()). */
+  std::map<int, std::string> sink_sdps_;
+  mutable std::mutex sink_sdp_mutex_;
+
   mutable std::mutex mutex_;
   std::map<int, std::shared_ptr<LineRuntime>> lines_;
 

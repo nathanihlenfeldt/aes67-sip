@@ -48,7 +48,8 @@ json line_to_json(const LineConfig& line) {
              {"remote_source_id", line.aes67.remote_source_id},
              {"remote_sdp", line.aes67.remote_sdp},
              {"ignore_refclk_gmid", line.aes67.ignore_refclk_gmid},
-             {"refclk_ptp_traceable", line.aes67.refclk_ptp_traceable}};
+             {"refclk_ptp_traceable", line.aes67.refclk_ptp_traceable},
+             {"commissioning_loopback", line.aes67.commissioning_loopback}};
   json sip{{"account", line.sip.account},
            {"extension", line.sip.extension},
            {"display_name", line.sip.display_name},
@@ -138,6 +139,8 @@ LineConfig line_from_json(const json& document) {
         json_get<bool>(a, "ignore_refclk_gmid", line.aes67.ignore_refclk_gmid);
     line.aes67.refclk_ptp_traceable =
         json_get<bool>(a, "refclk_ptp_traceable", line.aes67.refclk_ptp_traceable);
+    line.aes67.commissioning_loopback = json_get<bool>(
+        a, "commissioning_loopback", line.aes67.commissioning_loopback);
   }
   if (json_has(document, "sip")) {
     const auto& s = document.at("sip");

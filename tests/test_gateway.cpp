@@ -213,11 +213,25 @@ TEST_CASE(rest_api_serves_status_and_controls_lines) {
   CHECK_EQ(status.at("lines")[0].at("name").get<std::string>(),
            std::string("Stage Left"));
 
-  // the simulated daemon must have been provisioned from the line config
+  // the simulated daemon must have been provisioned from the line config; the
+  // sink is deliberately NOT created (no endpoint SDP and commissioning_loopback
+  // is off) so that a sink wired up elsewhere is never overwritten
   const json sinks = get_json(client, "/api/aes67/sinks");
   const json sources = get_json(client, "/api/aes67/sources");
   CHECK_EQ(sources.at("sources").size(), 1U);
-  CHECK_EQ(sinks.at("sinks").size(), 1U);  // looped back for commissioning
+  CHECK_EQ(sinks.at("sinks").size(), 0U);
+  CHECK_EQ(status.at("lines")[0].at("aes67").at("sdp_source").get<std::string>(),
+           std::string("unmanaged"));
+
+  // ... and the commissioning loopback is opt-in
+  CHECK(client.Post("/api/lines/0/config",
+                    json{{"aes67", {{"commissioning_loopback", true}}}}.dump(),
+                    "application/json"));
+  const json looped = get_json(client, "/api/aes67/sinks");
+  CHECK_EQ(looped.at("sinks").size(), 1U);
+  CHECK(gateway.wait_for([](const json& document) {
+    return document.at("lines")[0].at("aes67").at("sdp_source") == "loopback";
+  }));
 
   const json startup_config = get_json(client, "/api/lines/0/config");
   CHECK_EQ(startup_config.at("sip").at("extension").get<std::string>(),

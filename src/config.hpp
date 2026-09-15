@@ -97,6 +97,13 @@ struct LineAes67Config {
    * the flow otherwise - set this to false in that case.
    */
   bool refclk_ptp_traceable{true};
+  /**
+   * Commissioning aid: when no endpoint SDP is configured, subscribe the sink to
+   * our *own* source so the AES67 path can be exercised with the test tone.  Off
+   * by default, because the gateway must never overwrite a sink that was wired up
+   * elsewhere (Dante Controller, Q-SYS, the daemon UI) with a loopback.
+   */
+  bool commissioning_loopback{false};
 };
 
 /**
