@@ -146,6 +146,24 @@ if(PJSIP_FOUND)
     endif()
   endforeach()
 
+  # rpath directories: derived from the discovered library *files* so the
+  # binaries can be run straight from the build tree even when the custom
+  # prefix is not registered with pkg-config (which is the case in CI, where
+  # pjproject is built into third_party/ and only -DPJSIP_ROOT points at it).
+  set(_pjsip_rpath_dirs ${PJSIP_LINK_DIRS})
+  foreach(_lib IN LISTS _pjsip_link_libs)
+    if(IS_ABSOLUTE "${_lib}")
+      get_filename_component(_lib_dir "${_lib}" DIRECTORY)
+      list(APPEND _pjsip_rpath_dirs "${_lib_dir}")
+    endif()
+  endforeach()
+  if(_pjsip_rpath_dirs)
+    list(REMOVE_DUPLICATES _pjsip_rpath_dirs)
+  endif()
+  set(PJSIP_LINK_DIRS ${_pjsip_rpath_dirs})
+  unset(_pjsip_rpath_dirs)
+  unset(_lib_dir)
+
   set(PJSIP_LIBRARIES ${_pjsip_link_libs})
 
   if(NOT TARGET PJSIP::PJSUA2)
