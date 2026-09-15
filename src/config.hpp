@@ -66,6 +66,12 @@ struct SipConfig {
   int keep_alive_interval{15};
   std::string stun_server;
   std::string srtp{"disabled"};  // disabled | optional | mandatory
+  /**
+   * pjsip log level, 0-5.  Anything above 0 makes pjsip write the SIP messages it
+   * sends and receives to stderr (see `journalctl -u aes67-sip`), which is how you
+   * inspect a 401/403 challenge and the credentials that answered it.
+   */
+  int debug_log_level{0};
 };
 
 /** AES67 side of a line: which RAVENNA channels carry the intercom audio. */

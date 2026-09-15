@@ -275,6 +275,8 @@ Config Config::from_json(const json& document) {
         json_get<int>(s, "keep_alive_interval", config.sip.keep_alive_interval);
     config.sip.stun_server = json_get<std::string>(s, "stun_server", "");
     config.sip.srtp = json_get<std::string>(s, "srtp", config.sip.srtp);
+    config.sip.debug_log_level =
+        json_get<int>(s, "debug_log_level", config.sip.debug_log_level);
   }
 
   if (json_has(document, "accounts")) {
@@ -338,7 +340,8 @@ json Config::to_json() const {
                 {"retry_interval", this->sip.retry_interval},
                 {"keep_alive_interval", this->sip.keep_alive_interval},
                 {"stun_server", this->sip.stun_server},
-                {"srtp", this->sip.srtp}};
+                {"srtp", this->sip.srtp},
+                {"debug_log_level", this->sip.debug_log_level}};
 
   json accounts_json = json::array();
   for (const auto& account : accounts) {

@@ -231,8 +231,10 @@ void PjsipSipEngine::runner(std::promise<std::string>* startup) {
   try {
     endpoint_.libCreate();
     pj::EpConfig ep_config;
-    ep_config.logConfig.level = 2;  // our own logger is the interface
-    ep_config.logConfig.consoleLevel = 0;
+    // Level 0 keeps pjsip quiet (our own logger is the interface) until
+    // sip.debug_log_level is raised to trace SIP signalling.
+    ep_config.logConfig.level = config_.debug_log_level;
+    ep_config.logConfig.consoleLevel = config_.debug_log_level;
     ep_config.uaConfig.maxCalls = 32;
     ep_config.uaConfig.threadCnt = 1;  // pjsua owns its message queue threads
     ep_config.medConfig.clockRate = clock_rate_;
