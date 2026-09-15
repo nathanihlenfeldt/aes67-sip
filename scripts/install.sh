@@ -77,6 +77,8 @@ run() {
   "$@"
 }
 
+report_line() { printf '  %-26s %s\n' "$1" "$2"; }
+
 
 # ---------------------------------------------------------------------------
 # arguments
@@ -348,35 +350,82 @@ fi
 
 # ---------------------------------------------------------------------------
 # 7. ZeroTier (NAT-free path to the FreePBX)
+#
+# The appliance owns this: it installs ZeroTier, joins the network and reports
+# whether the controller has authorised the node yet.
 # ---------------------------------------------------------------------------
-case "${WITH_ZEROTIER}" in
-  no) log "skipping ZeroTier (--no-zerotier)" ;;
-  yes|"")
-    if command -v zerotier-cli >/dev/null 2>&1; then
-      log "ZeroTier is already installed"
-    else
-      log "installing ZeroTier"
-      run bash -c 'curl -fsSL https://install.zerotier.com | bash' ||
-        warn "ZeroTier install failed; use a public FreePBX endpoint instead"
+if [[ "${WITH_ZEROTIER}" == "no" ]]; then
+  log "skipping ZeroTier (--no-zerotier)"
+else
+  if ! command -v zerotier-cli >/dev/null 2>&1; then
+    log "installing ZeroTier"
+    run bash -c 'curl -fsSL https://install.zerotier.com | bash' ||
+      warn "ZeroTier install failed; use a public FreePBX endpoint instead"
+  else
+    log "ZeroTier is already installed"
+  fi
+
+  if command -v zerotier-cli >/dev/null 2>&1; then
+    run systemctl enable --now zerotier-one || true
+
+    # Ask for the network id when it was not passed on the command line.  Note
+    # that `curl | bash` makes stdin the script itself, so the prompt must read
+    # from the terminal.
+    if [[ -z "${ZEROTIER_NETWORK}" && ${DRY_RUN} -eq 0 && -r /dev/tty ]]; then
+      if read -r -t 60 -p "ZeroTier network id to join (blank to skip): " ZEROTIER_NETWORK </dev/tty; then
+        ZEROTIER_NETWORK="$(printf '%s' "${ZEROTIER_NETWORK}" | tr -d '[:space:]')"
+      fi
+      echo
     fi
-    if command -v zerotier-cli >/dev/null 2>&1; then
-      run systemctl enable --now zerotier-one || true
-      if [[ -n "${ZEROTIER_NETWORK}" ]]; then
-        run zerotier-cli join "${ZEROTIER_NETWORK}" || warn "ZeroTier join failed"
-        log "authorise this node in the ZeroTier admin console, then re-check with: zerotier-cli listnetworks"
+
+    if [[ -z "${ZEROTIER_NETWORK}" ]]; then
+      warn "no ZeroTier network given: join later with 'zerotier-cli join <id>'"
+    else
+      # joining twice is harmless but noisy, so check first
+      if zerotier-cli listnetworks 2>/dev/null | grep -q "${ZEROTIER_NETWORK}"; then
+        log "already a member of ZeroTier network ${ZEROTIER_NETWORK}"
       else
-        warn "no --zerotier-network given: join manually with 'zerotier-cli join <id>'"
+        log "joining ZeroTier network ${ZEROTIER_NETWORK}"
+        run zerotier-cli join "${ZEROTIER_NETWORK}" || warn "ZeroTier join failed"
+      fi
+
+      # report the node address (the controller must authorise it) and wait for
+      # the membership to come up
+      NODE_ADDRESS="$(zerotier-cli info 2>/dev/null | awk '{print $3}')"
+      report_line "ZeroTier node" "${NODE_ADDRESS:-unknown} - authorise it in my.zerotier.com"
+      if [[ ${DRY_RUN} -eq 0 ]]; then
+        for _ in $(seq 1 10); do
+          STATUS="$(zerotier-cli listnetworks 2>/dev/null |
+                    awk -v net="${ZEROTIER_NETWORK}" '$3 == net {print $6}')"
+          case "${STATUS}" in
+            OK) break ;;
+            ACCESS_DENIED) break ;;
+            *) sleep 2 ;;
+          esac
+        done
+        case "${STATUS}" in
+          OK)
+            ZT_IFACE="$(zerotier-cli listnetworks 2>/dev/null |
+                        awk -v net="${ZEROTIER_NETWORK}" '$3 == net {print $8}')"
+            log "ZeroTier network ${ZEROTIER_NETWORK} is up on ${ZT_IFACE:-?}"
+            ;;
+          ACCESS_DENIED)
+            warn "ZeroTier is waiting for authorisation: accept node ${NODE_ADDRESS:-?} in the network's member list"
+            ;;
+          *)
+            warn "ZeroTier status for ${ZEROTIER_NETWORK}: ${STATUS:-unknown} (check 'zerotier-cli listnetworks')"
+            ;;
+        esac
       fi
     fi
-    ;;
-esac
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # 8. preflight report
 # ---------------------------------------------------------------------------
 echo
 log "install finished, preflight report"
-report_line() { printf '  %-26s %s\n' "$1" "$2"; }
 
 if lsmod | grep -q '^MergingRavennaALSA'; then
   report_line "RAVENNA module" "loaded"

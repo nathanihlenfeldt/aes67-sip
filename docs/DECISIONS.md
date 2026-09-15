@@ -73,10 +73,13 @@ a preflight report (PTP lock, daemon reachable, ALSA device present).
 
 ## Open items (need confirmation before commissioning)
 
-1. **Public URL for `curl | bash`** requires the code to be reachable anonymously:
-   make the repository public, or host `install.sh` / a release tarball publicly.
-   GPL-3.0 distribution effectively requires source availability anyway.
-2. **ZeroTier network id**, and whether the FreePBX side is already joined to it.
+1. **Public URL for `curl | bash`**: the repository is public, so the documented
+   command works anonymously. GPL-3.0 distribution also requires source availability.
+2. **ZeroTier network id**: the installer now performs the whole ZeroTier setup
+   (install, join, report the node address, wait for authorisation) - only the network
+   id itself is still needed, passed as `--zerotier-network <id>` or answered at the
+   prompt. The node must be authorised in `my.zerotier.com` (the installer reports
+   `ACCESS_DENIED` until then).
 3. **How the endpoints subscribe to our stream**: the gateway's *source* is created on
    the RAVENNA device and advertised over SAP; confirm the panels either subscribe by
    SAP/Ravenna or are configured with our multicast address by hand.

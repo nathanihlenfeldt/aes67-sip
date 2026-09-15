@@ -46,6 +46,13 @@ the kernel module, the ALSA device, PTP lock, the daemon API and the gateway API
 Useful flags: `--no-zerotier`, `--ref <tag>`, `--skip-kernel-module`, `--skip-daemon`,
 `--skip-gateway`, `--no-start`, `--dry-run`, `--help`.
 
+**ZeroTier is configured by the installer** (that is the NAT-free path to the FreePBX):
+it installs ZeroTier, joins `--zerotier-network <id>` - or asks for the network id on
+the terminal when the flag is omitted - then prints the node address and waits for the
+controller's reply, telling you clearly whether the node is `OK` or still
+`ACCESS_DENIED` (i.e. waiting to be authorised in `my.zerotier.com`). Pass
+`--no-zerotier` if the appliance reaches a public FreePBX endpoint instead.
+
 
 ## Configuration
 
