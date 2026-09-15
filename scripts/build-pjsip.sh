@@ -56,8 +56,24 @@ if [[ ! -f config.status ]]; then
 fi
 
 echo "==> building PJSIP (this takes a few minutes)"
-make -j"$(nproc)" dep
-make -j"$(nproc)"
+# Parallelism: BUILD_JOBS is set by the installer, which caps it by available
+# RAM.  Without it, cap it by memory here as well - a 1 GB Pi running one job
+# per core thrashes its swap and looks hung.
+JOBS="${PJSIP_JOBS:-${BUILD_JOBS:-}}"
+if [[ -z "${JOBS}" ]]; then
+  CORES="$(nproc 2>/dev/null || echo 1)"
+  MEM_MB="$(awk '/^MemTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)"
+  if (( MEM_MB > 0 )); then
+    JOBS=$(( MEM_MB / 900 ))
+    (( JOBS < 1 )) && JOBS=1
+    (( JOBS > CORES )) && JOBS="${CORES}"
+  else
+    JOBS="${CORES}"
+  fi
+fi
+echo "==> using ${JOBS} parallel job(s)"
+make -j"${JOBS}" dep
+make -j"${JOBS}"
 make install
 
 echo "==> PJSIP ${PJSIP_VERSION} installed in ${PJSIP_PREFIX}"

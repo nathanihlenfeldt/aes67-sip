@@ -57,6 +57,7 @@ Usage: install.sh [options]
 
   --zerotier-network <id>   install ZeroTier and join this network id
   --no-zerotier             do not install ZeroTier
+  --jobs <n>                parallel compile jobs (default: capped by RAM)
   --ref <git ref>           branch/tag of aes67-sip to install (default: main)
   --repo <url>              git URL of the aes67-sip repository
   --skip-kernel-module      do not build the RAVENNA kernel module
@@ -79,6 +80,89 @@ run() {
 
 report_line() { printf '  %-26s %s\n' "$1" "$2"; }
 
+# ---------------------------------------------------------------------------
+# build parallelism and memory
+#
+# A Raspberry Pi has 4 cores but often only 1-2 GB of RAM, while the
+# aes67-daemon (Boost) wants ~1 GB per compiler process.  Running one job per
+# core without enough swap thrashes the SD card and looks like a hang, so the
+# job count is capped by memory and a temporary swap file is added when the
+# system is short of it.
+# ---------------------------------------------------------------------------
+mem_total_mb() { awk '/^MemTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0; }
+swap_total_mb() { awk '/^SwapTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0; }
+
+detect_jobs() {
+  local cores mem jobs
+  cores="$(nproc 2>/dev/null || echo 1)"
+  mem="$(mem_total_mb)"
+  if [[ "${mem}" -le 0 ]]; then
+    echo "${cores}"
+    return
+  fi
+  jobs=$(( mem / 900 ))           # ~900 MB of RAM per compiler process
+  (( jobs < 1 )) && jobs=1
+  (( jobs > cores )) && jobs=cores
+  echo "${jobs}"
+}
+
+SWAP_FILE=""
+remove_temporary_swap() {
+  if [[ -n "${SWAP_FILE}" && -f "${SWAP_FILE}" ]]; then
+    swapoff "${SWAP_FILE}" 2>/dev/null || true
+    rm -f "${SWAP_FILE}"
+    log "removed the temporary swap file ${SWAP_FILE}"
+  fi
+}
+trap remove_temporary_swap EXIT
+
+ensure_swap() {
+  local mem swap target
+  mem="$(mem_total_mb)"
+  swap="$(swap_total_mb)"
+  # enough memory, or the system already swaps: nothing to do
+  [[ "${mem}" -ge 3500 ]] && return 0
+  [[ "${swap}" -ge 1500 ]] && return 0
+  target=$(( 3200 - mem - swap ))
+  (( target < 512 )) && target=512
+  (( target > 2048 )) && target=2048
+  if [[ ${DRY_RUN} -eq 1 ]]; then
+    log "[dry-run] would add a ${target} MB swap file for the build"
+    return 0
+  fi
+  SWAP_FILE="/var/swap-aes67-installer"
+  log "adding a temporary ${target} MB swap file (RAM ${mem} MB, swap ${swap} MB)"
+  rm -f "${SWAP_FILE}"
+  if ! fallocate -l "${target}M" "${SWAP_FILE}" 2>/dev/null; then
+    dd if=/dev/zero of="${SWAP_FILE}" bs=1M count="${target}" status=none || {
+      warn "cannot create a swap file - reduce --jobs if the build fails"
+      SWAP_FILE=""
+      return 0
+    }
+  fi
+  chmod 600 "${SWAP_FILE}"
+  if ! mkswap "${SWAP_FILE}" >/dev/null 2>&1; then
+    warn "mkswap failed on ${SWAP_FILE}"
+    rm -f "${SWAP_FILE}"
+    SWAP_FILE=""
+    return 0
+  fi
+  if ! swapon "${SWAP_FILE}" 2>/dev/null; then
+    warn "swapon failed on ${SWAP_FILE}"
+    rm -f "${SWAP_FILE}"
+    SWAP_FILE=""
+    return 0
+  fi
+  log "swap is now $(swap_total_mb) MB"
+}
+
+# Reports whether the kernel killed compilers for lack of memory.
+report_oom() {
+  if dmesg 2>/dev/null | grep -qiE 'out of memory|oom-kill'; then
+    report_line "memory" "OOM kills in dmesg - re-run with --jobs 1 and more swap"
+  fi
+}
+
 
 # ---------------------------------------------------------------------------
 # arguments
@@ -87,6 +171,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --zerotier-network) ZEROTIER_NETWORK="${2:-}"; WITH_ZEROTIER="yes"; shift 2 ;;
     --no-zerotier)      WITH_ZEROTIER="no"; shift ;;
+    --jobs)             BUILD_JOBS="${2:-}"; shift 2 ;;
     --ref)              REF="${2:-}"; shift 2 ;;
     --repo)             REPO_URL="${2:-}"; shift 2 ;;
     --skip-kernel-module) SKIP_KERNEL_MODULE=1; shift ;;
@@ -116,7 +201,16 @@ if [[ "$(getconf LONG_BIT)" != "64" ]]; then
   warn "32-bit userland detected; use the 64-bit Raspberry Pi OS / Ubuntu image"
 fi
 
-log "aes67-sip installer: arch=${ARCH} ref=${REF} dry-run=${DRY_RUN}"
+# parallelism: capped by memory unless the operator overrides it with --jobs
+JOBS="${BUILD_JOBS:-$(detect_jobs)}"
+if [[ ! "${JOBS}" =~ ^[0-9]+$ ]] || (( JOBS < 1 )); then
+  die "--jobs expects a positive integer (got '${BUILD_JOBS}')"
+fi
+log "aes67-sip installer: arch=${ARCH} ref=${REF} jobs=${JOBS} dry-run=${DRY_RUN}"
+
+# Add swap before anything heavy is compiled: a 1-2 GB Pi with the stock swap
+# file cannot compile the daemon and PJSIP with one job per core.
+ensure_swap
 
 # ---------------------------------------------------------------------------
 # 1. build dependencies
@@ -239,7 +333,7 @@ else
       -DRAVENNA_ALSA_LKM_DIR="${DAEMON_DIR}/3rdparty/ravenna-alsa-lkm" \
       -DWITH_AVAHI=ON -DWITH_SYSTEMD=ON -DWITH_STREAMER=ON \
       -DFAKE_DRIVER=OFF
-    cmake --build "${DAEMON_DIR}/build" -j"$(nproc)"
+    cmake --build "${DAEMON_DIR}/build" -j"${JOBS}"
     install -m 0755 "${DAEMON_DIR}/build/aes67-daemon" "${PREFIX}/bin/aes67-daemon"
   fi
 
@@ -292,14 +386,15 @@ fi
 # ---------------------------------------------------------------------------
 if [[ ${SKIP_GATEWAY} -eq 0 ]]; then
   log "building PJSIP ${PJSIP_VERSION} (this takes several minutes on a Pi)"
-  run env PJSIP_VERSION="${PJSIP_VERSION}" bash "${SRC_DIR}/scripts/build-pjsip.sh"
+  run env PJSIP_VERSION="${PJSIP_VERSION}" BUILD_JOBS="${JOBS}" \
+    bash "${SRC_DIR}/scripts/build-pjsip.sh"
 
   log "building aes67-sip"
   if [[ ${DRY_RUN} -eq 0 ]]; then
     cmake -S "${SRC_DIR}" -B "${SRC_DIR}/build" -DCMAKE_BUILD_TYPE=Release \
       -DWITH_PJSIP=ON -DWITH_ALSA=ON -DWITH_TESTS=OFF \
       -DPJSIP_ROOT="${SRC_DIR}/third_party/pjsip-install" >/dev/null
-    cmake --build "${SRC_DIR}/build" -j"$(nproc)"
+    cmake --build "${SRC_DIR}/build" -j"${JOBS}"
     install -m 0755 "${SRC_DIR}/build/aes67-sip" "${PREFIX}/bin/aes67-sip"
   fi
 
@@ -446,6 +541,8 @@ if [[ ${SKIP_GATEWAY} -eq 0 ]]; then
   report_line "aes67-sip API" "${GW:-unreachable on :8081}"
 fi
 report_line "interfaces" "$(ip -brief address show 2>/dev/null | awk '{print $1}' | tr '\n' ' ')"
+report_line "memory" "$(mem_total_mb) MB RAM, $(swap_total_mb) MB swap, ${JOBS} build job(s)"
+report_oom
 report_line "web UI" "${WEBUI_DIR}"
 report_line "config" "${CONFIG_FILE}"
 
