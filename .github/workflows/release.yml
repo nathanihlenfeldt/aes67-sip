@@ -32,7 +32,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PJSIP_PREFIX }}
-          key: pjsip-${{ env.PJSIP_VERSION }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-pjsip.sh') }}
+          # keyed per runner image on purpose: see .github/workflows/build.yml
+          key: pjsip-${{ env.PJSIP_VERSION }}-${{ matrix.runner }}-${{ hashFiles('scripts/build-pjsip.sh') }}
 
       - name: Build PJSIP (pjsua2)
         run: bash scripts/build-pjsip.sh

@@ -32,7 +32,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PJSIP_PREFIX }}
-          key: pjsip-${{ env.PJSIP_VERSION }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-pjsip.sh') }}
+          # NOTE: the key must include the runner image, not just OS/arch.
+          # ubuntu-22.04 and ubuntu-24.04 are both Linux/X64 but have different
+          # glibc versions, so they cannot share pjproject binaries
+          # (they fail to link with undefined GLIBC_2.3x references).
+          key: pjsip-${{ env.PJSIP_VERSION }}-${{ matrix.runner }}-${{ hashFiles('scripts/build-pjsip.sh') }}
 
       - name: Build PJSIP (pjsua2)
         run: bash scripts/build-pjsip.sh
