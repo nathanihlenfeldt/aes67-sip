@@ -361,29 +361,44 @@ bool Config::load(const std::string& path, Config* config, std::string* error) {
 }
 
 bool Config::save(const std::string& path, std::string* error) const {
+  const std::string document = to_json().dump(2) + "\n";
+
+  // Preferred: write a temporary file next to the target and rename it, so a
+  // crash mid-save cannot truncate the configuration.
+  //
+  // Under systemd sandboxing (ProtectSystem=strict with ReadWritePaths naming
+  // the config *file*) the file is writable but the directory is not, so
+  // creating the temporary file fails; in that case fall back to writing in
+  // place.  That is not atomic, but it is what the sandbox allows.
   const std::string temporary = path + ".tmp";
   {
     std::ofstream output(temporary, std::ios::trunc);
-    if (!output.is_open()) {
-      if (error) {
-        *error = "cannot write config file '" + temporary + "'";
+    if (output.is_open()) {
+      output << document;
+      output.close();
+      if (output.good() && std::rename(temporary.c_str(), path.c_str()) == 0) {
+        return true;
       }
-      return false;
-    }
-    output << to_json().dump(2) << std::endl;
-    if (!output.good()) {
-      if (error) {
-        *error = "error while writing '" + temporary + "'";
-      }
-      return false;
+      std::remove(temporary.c_str());
     }
   }
-  if (std::rename(temporary.c_str(), path.c_str()) != 0) {
+
+  std::ofstream output(path, std::ios::trunc);
+  if (!output.is_open()) {
     if (error) {
-      *error = "cannot replace config file '" + path + "'";
+      *error = "cannot write config file '" + path + "'";
     }
     return false;
   }
+  output << document;
+  if (!output.good()) {
+    if (error) {
+      *error = "error while writing '" + path + "'";
+    }
+    return false;
+  }
+  LOG_WARN("config saved in place: the atomic replace of '", path,
+           "' is not permitted (systemd ReadWritePaths)");
   return true;
 }
 

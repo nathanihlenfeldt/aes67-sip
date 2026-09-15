@@ -517,8 +517,12 @@ if [[ ${SKIP_GATEWAY} -eq 0 ]]; then
   if [[ ${DRY_RUN} -eq 0 ]]; then
     if [[ -f "${CONFIG_FILE}" ]]; then
       log "${CONFIG_FILE} exists, leaving it untouched"
+      # The UI saves changes back to this file, so the service user needs write
+      # access (read-only /etc plus ReadWritePaths in the unit allow it).
+      chown root:aes67-sip "${CONFIG_FILE}" 2>/dev/null || true
+      chmod 0660 "${CONFIG_FILE}" 2>/dev/null || true
     else
-      install -m 0640 -o root -g aes67-sip "${SRC_DIR}/config/aes67-sip.conf" "${CONFIG_FILE}"
+      install -m 0660 -o root -g aes67-sip "${SRC_DIR}/config/aes67-sip.conf" "${CONFIG_FILE}"
       python3 - "${CONFIG_FILE}" "${WEBUI_DIR}" <<'PY'
 import json, sys
 path, webui = sys.argv[1], sys.argv[2]

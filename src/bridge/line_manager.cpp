@@ -760,8 +760,7 @@ json LineManager::self_test() {
     for (const auto& account : config_->accounts) {
       const std::string host = registrar_dns_host(account.registrar);
       if (host.empty()) {
-        add("sip registrar " + account.id, false,
-            "no registrar configured");
+        add("sip registrar " + account.id, false, "no registrar configured");
         continue;
       }
       struct addrinfo hints {};
@@ -777,9 +776,8 @@ json LineManager::self_test() {
             result->ai_family == AF_INET
                 ? static_cast<const void*>(
                       &reinterpret_cast<sockaddr_in*>(result->ai_addr)->sin_addr)
-                : static_cast<const void*>(&reinterpret_cast<sockaddr_in6*>(
-                                               result->ai_addr)
-                                               ->sin6_addr);
+                : static_cast<const void*>(
+                      &reinterpret_cast<sockaddr_in6*>(result->ai_addr)->sin6_addr);
         ::inet_ntop(result->ai_family, address, text, sizeof(text));
         detail = host + " resolves to " + text;
       } else {

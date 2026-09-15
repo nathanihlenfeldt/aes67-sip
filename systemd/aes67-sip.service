@@ -45,7 +45,9 @@ ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/aes67-sip /var/log/aes67-sip
+# The web UI saves configuration changes back to the config file, so that one
+# path must stay writable (the leading '-' tolerates a missing file).
+ReadWritePaths=/var/lib/aes67-sip /var/log/aes67-sip -/etc/aes67-sip.conf
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
 RestrictRealtime=no
