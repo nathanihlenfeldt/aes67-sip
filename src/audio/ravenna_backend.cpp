@@ -163,7 +163,10 @@ bool RavennaAudioBackend::open_stream(snd_pcm_stream_t direction,
     }
     return false;
   }
-  snd_pcm_uframes_t buffer = period * std::max(2U, config_.periods);
+  // The device is clocked at 1 ms periods.  Keep at least 6 periods of buffer:
+  // on kernels >= 6.15 the driver's tick is a soft hrtimer that delivers audio
+  // in bursts, and a 3 ms buffer overruns as soon as the thread is delayed.
+  snd_pcm_uframes_t buffer = period * std::max(6U, config_.periods);
   snd_pcm_hw_params_set_buffer_size_near(*handle, params, &buffer);
 
   if ((rc = snd_pcm_hw_params(*handle, params)) < 0) {
@@ -292,10 +295,23 @@ bool RavennaAudioBackend::read(float* destination, unsigned frames,
     const snd_pcm_sframes_t got =
         snd_pcm_readi(capture_, capture_raw_.data(), remaining);
     if (got == -EPIPE) {
+      // Overrun: the device buffer was not drained in time.  Recover and keep
+      // the 1 ms cadence by returning silence for this block - returning false
+      // made the caller sleep up to 100 ms, which turned one overrun into a
+      // cascade (and the error text was empty, so the log explained nothing).
       overruns_++;
-      snd_pcm_prepare(capture_);
+      if (snd_pcm_prepare(capture_) < 0) {
+        if (error) {
+          *error = "capture overrun and prepare failed";
+        }
+        fill_silence(destination, frames);
+        return false;
+      }
+      if (error) {
+        *error = "capture overrun (recovered)";
+      }
       fill_silence(destination, frames);
-      return false;
+      return true;
     }
     if (got < 0) {
       if (error) {
@@ -346,9 +362,19 @@ bool RavennaAudioBackend::write(const float* source, unsigned frames,
     const snd_pcm_sframes_t written =
         snd_pcm_writei(playback_, playback_raw_.data(), remaining);
     if (written == -EPIPE) {
+      // Underrun: nothing to send yet.  Recover and drop this block rather than
+      // failing the whole write (see the matching comment in read()).
       underruns_++;
-      snd_pcm_prepare(playback_);
-      return false;
+      if (snd_pcm_prepare(playback_) < 0) {
+        if (error) {
+          *error = "playback underrun and prepare failed";
+        }
+        return false;
+      }
+      if (error) {
+        *error = "playback underrun (recovered)";
+      }
+      return true;
     }
     if (written < 0) {
       if (error) {

@@ -19,7 +19,7 @@ struct AudioConfig {
   unsigned sample_rate{48000};  // AES67 native rate, do not change
   unsigned channels{16};        // channels opened on the RAVENNA device
   unsigned period_frames{48};   // 1 ms at 48 kHz, matches the daemon
-  unsigned periods{3};
+  unsigned periods{8};
   std::string format{"s16_le"};  // s16_le | s24_3le | s32_le
   double null_tone_hz{0.0};      // null backend test tone (0 = silence)
 

@@ -724,8 +724,16 @@ bool PjsipSipEngine::add_line(const LineConfig& line, std::string* error) {
           account_config.sipConfig.proxies.push_back(account->outbound_proxy);
         }
         if (!account->username.empty()) {
+          // pjsip only uses a credential whose realm matches the challenge, and
+          // "*" is the documented wildcard ("use '*' to make a credential that
+          // can be used to authenticate against any challenges").  Passing an
+          // empty realm silently matches nothing, which leaves REGISTER and
+          // INVITE stuck at 401 against PBXs that use a realm (Asterisk uses
+          // "asterisk").
+          const std::string realm =
+              account->auth_realm.empty() ? "*" : account->auth_realm;
           account_config.sipConfig.authCreds.push_back(
-              pj::AuthCredInfo("digest", account->auth_realm, account->username, 0,
+              pj::AuthCredInfo("digest", realm, account->username, 0,
                                account->password));
         }
         if (config_.keep_alive_interval > 0) {
