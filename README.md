@@ -1,5 +1,9 @@
 # aes67-sip
 
+[![build](https://github.com/nathanihlenfeldt/aes67-sip/actions/workflows/build.yml/badge.svg)](https://github.com/nathanihlenfeldt/aes67-sip/actions/workflows/build.yml)
+[![release](https://github.com/nathanihlenfeldt/aes67-sip/actions/workflows/release.yml/badge.svg)](https://github.com/nathanihlenfeldt/aes67-sip/actions/workflows/release.yml)
+[![licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-blue.svg)](LICENSE)
+
 A Linux appliance that bridges **AES67 intercom endpoints on a production site** to a
 **conference on an off-site FreePBX**.
 
