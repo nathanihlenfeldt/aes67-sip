@@ -47,8 +47,7 @@ TEST_CASE(config_partial_merge_keeps_untouched_values) {
   config.lines[0].name = "Line A";
 
   config.merge(json{{"sip", {{"ptime_ms", 10}}},
-                    {"lines", json::array({json{{"id", 0},
-                                                {"name", "Line A"}}})}});
+                    {"lines", json::array({json{{"id", 0}, {"name", "Line A"}}})}});
 
   CHECK_EQ(config.sip.ptime_ms, 10);
   CHECK_EQ(config.accounts[0].username, std::string("keepme"));
@@ -75,12 +74,13 @@ TEST_CASE(config_load_and_save) {
 }
 
 TEST_CASE(config_parse_line_document) {
-  const json document{{"id", 3},
-                      {"name", "Camera 3"},
-                      {"enabled", false},
-                      {"gain_db", 2.0},
-                      {"aes67", {{"sink_id", 3}, {"source_id", 3}, {"channels", {6}}}},
-                      {"sip", {{"extension", "1003"}, {"call_mode", "dial_out"}}}};
+  const json document{
+      {"id", 3},
+      {"name", "Camera 3"},
+      {"enabled", false},
+      {"gain_db", 2.0},
+      {"aes67", {{"sink_id", 3}, {"source_id", 3}, {"channels", {6}}}},
+      {"sip", {{"extension", "1003"}, {"call_mode", "dial_out"}}}};
   const LineConfig line = Config::parse_line(document);
   CHECK_EQ(line.id, 3);
   CHECK_EQ(line.name, std::string("Camera 3"));

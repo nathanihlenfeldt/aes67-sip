@@ -30,8 +30,9 @@ std::unique_ptr<AudioBackend> create_audio_backend(const AudioConfig& config) {
 #ifdef WITH_ALSA
   return std::make_unique<RavennaAudioBackend>(config);
 #else
-  LOG_WARN("Ravenna audio backend requested but this build has no ALSA support; "
-           "falling back to the null backend");
+  LOG_WARN(
+      "Ravenna audio backend requested but this build has no ALSA support; "
+      "falling back to the null backend");
   return std::make_unique<NullAudioBackend>(config.null_tone_hz);
 #endif
 }

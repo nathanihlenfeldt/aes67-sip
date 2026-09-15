@@ -26,7 +26,8 @@ json account_to_json(const SipAccountConfig& account) {
 SipAccountConfig account_from_json(const json& document) {
   SipAccountConfig account;
   account.id = json_get<std::string>(document, "id", account.id);
-  account.registrar = json_get<std::string>(document, "registrar", account.registrar);
+  account.registrar =
+      json_get<std::string>(document, "registrar", account.registrar);
   account.username = json_get<std::string>(document, "username", account.username);
   account.password = json_get<std::string>(document, "password", "");
   account.auth_realm = json_get<std::string>(document, "auth_realm", "");
@@ -102,8 +103,7 @@ LineConfig line_from_json(const json& document) {
     line.aes67.stream_name = json_get<std::string>(a, "stream_name", "");
     line.aes67.auto_create_streams =
         json_get<bool>(a, "auto_create_streams", line.aes67.auto_create_streams);
-    line.aes67.remote_source_id =
-        json_get<std::string>(a, "remote_source_id", "");
+    line.aes67.remote_source_id = json_get<std::string>(a, "remote_source_id", "");
     line.aes67.remote_sdp = json_get<std::string>(a, "remote_sdp", "");
     line.aes67.ignore_refclk_gmid =
         json_get<bool>(a, "ignore_refclk_gmid", line.aes67.ignore_refclk_gmid);
@@ -145,7 +145,6 @@ void merge_object(json& target, const json& patch) {
 
 }  // namespace
 
-
 // ---------------------------------------------------------------------------
 // enums
 // ---------------------------------------------------------------------------
@@ -179,7 +178,8 @@ LineConfig Config::parse_line(const json& document) {
 
 Config Config::from_json(const json& document) {
   Config config;
-  config.log_severity = json_get<int>(document, "log_severity", config.log_severity);
+  config.log_severity =
+      json_get<int>(document, "log_severity", config.log_severity);
   config.http_addr = json_get<std::string>(document, "http_addr", config.http_addr);
   config.http_port = json_get<int>(document, "http_port", config.http_port);
   config.webui_dir = json_get<std::string>(document, "webui_dir", config.webui_dir);
@@ -188,11 +188,13 @@ Config Config::from_json(const json& document) {
 
   if (json_has(document, "audio")) {
     const auto& a = document.at("audio");
-    config.audio.backend = json_get<std::string>(a, "backend", config.audio.backend);
+    config.audio.backend =
+        json_get<std::string>(a, "backend", config.audio.backend);
     config.audio.device = json_get<std::string>(a, "device", config.audio.device);
     config.audio.sample_rate =
         json_get<unsigned>(a, "sample_rate", config.audio.sample_rate);
-    config.audio.channels = json_get<unsigned>(a, "channels", config.audio.channels);
+    config.audio.channels =
+        json_get<unsigned>(a, "channels", config.audio.channels);
     config.audio.period_frames =
         json_get<unsigned>(a, "period_frames", config.audio.period_frames);
     config.audio.periods = json_get<unsigned>(a, "periods", config.audio.periods);
@@ -225,13 +227,14 @@ Config Config::from_json(const json& document) {
     const auto& s = document.at("sip");
     config.sip.enabled = json_get<bool>(s, "enabled", config.sip.enabled);
     config.sip.engine = json_get<std::string>(s, "engine", config.sip.engine);
-    config.sip.transport = json_get<std::string>(s, "transport", config.sip.transport);
+    config.sip.transport =
+        json_get<std::string>(s, "transport", config.sip.transport);
     config.sip.local_port = json_get<int>(s, "local_port", config.sip.local_port);
     config.sip.codecs =
         json_get<std::vector<std::string>>(s, "codecs", config.sip.codecs);
     config.sip.ptime_ms = json_get<int>(s, "ptime_ms", config.sip.ptime_ms);
-    config.sip.registration_timeout = json_get<int>(
-        s, "registration_timeout", config.sip.registration_timeout);
+    config.sip.registration_timeout =
+        json_get<int>(s, "registration_timeout", config.sip.registration_timeout);
     config.sip.retry_interval =
         json_get<int>(s, "retry_interval", config.sip.retry_interval);
     config.sip.keep_alive_interval =
@@ -313,16 +316,11 @@ json Config::to_json() const {
     lines_json.push_back(line_to_json(line));
   }
 
-  return json{{"log_severity", log_severity},
-              {"http_addr", http_addr},
-              {"http_port", http_port},
-              {"webui_dir", webui_dir},
-              {"webui_api_auth", webui_api_auth},
-              {"audio", audio_json},
-              {"aes67_daemon", daemon_json},
-              {"sip", sip_json},
-              {"accounts", accounts_json},
-              {"lines", lines_json}};
+  return json{{"log_severity", log_severity},     {"http_addr", http_addr},
+              {"http_port", http_port},           {"webui_dir", webui_dir},
+              {"webui_api_auth", webui_api_auth}, {"audio", audio_json},
+              {"aes67_daemon", daemon_json},      {"sip", sip_json},
+              {"accounts", accounts_json},        {"lines", lines_json}};
 }
 
 // ---------------------------------------------------------------------------
@@ -413,4 +411,3 @@ int Config::line_index(int id) const {
 }
 
 }  // namespace aes67sip
-

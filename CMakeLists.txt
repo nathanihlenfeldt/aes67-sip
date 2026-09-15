@@ -208,6 +208,47 @@ if(WITH_WEBUI)
 endif()
 
 # ---------------------------------------------------------------------------
+# Installation
+#
+# Used by `cmake --install` (and by the release workflow, which stages into
+# DESTDIR and tars the result).  The one-command installer installs the same
+# files itself, so keep the two in sync.
+# ---------------------------------------------------------------------------
+include(GNUInstallDirs)
+
+install(TARGETS aes67-sip RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/webui/dist/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/aes67-sip/webui
+        OPTIONAL)
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/config/aes67-sip.conf
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/aes67-sip
+        RENAME aes67-sip.conf.sample)
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/config/aes67-sip.dev.conf
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/aes67-sip
+        RENAME aes67-sip.dev.conf)
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/systemd/aes67-sip.service
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/aes67-sip
+        RENAME aes67-sip.service)
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/install.sh
+              ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-ravenna.sh
+              ${CMAKE_CURRENT_SOURCE_DIR}/scripts/install-deps.sh
+              ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-pjsip.sh
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/aes67-sip/scripts
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                    GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/README.md
+              ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+              ${CMAKE_CURRENT_SOURCE_DIR}/docs/DECISIONS.md
+              ${CMAKE_CURRENT_SOURCE_DIR}/docs/api.md
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/aes67-sip)
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 message(STATUS "")

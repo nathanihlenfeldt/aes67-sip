@@ -82,10 +82,10 @@ bool RavennaAudioBackend::open(const AudioFormat& format, std::string* error) {
   playback_raw_.assign(raw_bytes, 0);
   open_ = true;
 
-  LOG_INFO("RAVENNA audio device '", config_.device, "' opened: ",
-           format_.channels, " ch, ", format_.sample_rate, " Hz, ",
-           format_.period_frames, " frames/period, ", config_.periods,
-           " periods, format ", config_.format);
+  LOG_INFO("RAVENNA audio device '", config_.device, "' opened: ", format_.channels,
+           " ch, ", format_.sample_rate, " Hz, ", format_.period_frames,
+           " frames/period, ", config_.periods, " periods, format ",
+           config_.format);
   return true;
 }
 
@@ -244,7 +244,8 @@ size_t RavennaAudioBackend::from_float(const float* source, size_t samples,
       auto* data = static_cast<uint8_t*>(destination);
       for (size_t i = 0; i < samples; ++i) {
         const float clamped = std::max(-1.0F, std::min(1.0F, source[i]));
-        const int32_t value = static_cast<int32_t>(std::lrint(clamped * 8388607.0F));
+        const int32_t value =
+            static_cast<int32_t>(std::lrint(clamped * 8388607.0F));
         data[i * 3 + 0] = static_cast<uint8_t>(value & 0xFF);
         data[i * 3 + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
         data[i * 3 + 2] = static_cast<uint8_t>((value >> 16) & 0xFF);
@@ -373,5 +374,3 @@ std::string RavennaAudioBackend::detail() const {
 }
 
 }  // namespace aes67sip
-
-

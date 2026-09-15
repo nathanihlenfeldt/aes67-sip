@@ -185,4 +185,3 @@ TEST_CASE(router_test_tone_reaches_the_aes67_output) {
   CHECK(router.playback_channel_dbfs()[0] > -20.0);
   router.stop();
 }
-

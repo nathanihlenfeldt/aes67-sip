@@ -16,8 +16,8 @@ namespace aes67sip {
 namespace {
 
 /** Codecs the gateway knows about; everything else is disabled. */
-const char* kKnownCodecs[] = {"PCMU/8000/1", "PCMA/8000/1", "G722/16000/1",
-                              "G729/8000/1", "opus/48000/2", "iLBC/8000/1",
+const char* kKnownCodecs[] = {"PCMU/8000/1",   "PCMA/8000/1",  "G722/16000/1",
+                              "G729/8000/1",   "opus/48000/2", "iLBC/8000/1",
                               "speex/16000/1", "speex/8000/1", "GSM/8000/1"};
 
 }  // namespace
@@ -312,7 +312,8 @@ PjsipSipEngine::LineContext* PjsipSipEngine::find(int line_id) {
   return it == lines_.end() ? nullptr : it->second.get();
 }
 
-const SipAccountConfig* PjsipSipEngine::account_config(const std::string& id) const {
+const SipAccountConfig* PjsipSipEngine::account_config(
+    const std::string& id) const {
   for (const auto& account : accounts_) {
     if (account.id == id) {
       return &account;
@@ -353,9 +354,8 @@ void PjsipSipEngine::set_codec_priorities() {
     priority = std::max(1, priority - 10);
   }
   for (const char* codec : kKnownCodecs) {
-    const bool configured =
-        std::find(config_.codecs.begin(), config_.codecs.end(), codec) !=
-        config_.codecs.end();
+    const bool configured = std::find(config_.codecs.begin(), config_.codecs.end(),
+                                      codec) != config_.codecs.end();
     if (!configured) {
       try {
         endpoint_.codecSetPriority(codec, 0);
@@ -464,8 +464,8 @@ void PjsipSipEngine::setup_line_media(int line_id) {
   auto port = std::make_unique<PjsipAudioPort>(line_id, media_);
   port->open("aes67-line" + std::to_string(line_id), rate, ptime_ms_);
   try {
-    audio->startTransmit(*port);   // remote -> AES67 playback
-    port->startTransmit(*audio);   // AES67 capture -> remote
+    audio->startTransmit(*port);  // remote -> AES67 playback
+    port->startTransmit(*audio);  // AES67 capture -> remote
   } catch (const pj::Error& err) {
     LOG_ERROR("line ", line_id, ": cannot connect the media port: ", err.info());
     return;
@@ -547,9 +547,9 @@ void PjsipSipEngine::notify_reg_state(int line_id, int code,
     status.error = reason;
   } else {
     status.state = "error";
-    status.error = reason.empty() ? ("registration failed (" +
-                                     std::to_string(code) + ")")
-                                  : reason;
+    status.error = reason.empty()
+                       ? ("registration failed (" + std::to_string(code) + ")")
+                       : reason;
   }
   LOG_INFO("line ", line_id, ": registration ", status.state,
            status.error.empty() ? "" : (" (" + status.error + ")"));
@@ -645,12 +645,14 @@ bool PjsipSipEngine::reload_accounts(const std::vector<SipAccountConfig>& accoun
     accounts_ = accounts;
     return true;
   }
-  return run_on_pjsip<bool>([this, accounts] {
-    std::lock_guard<std::mutex> lock(mutex_);
-    accounts_ = accounts;
-    LOG_INFO("SIP accounts updated (", accounts_.size(), ")");
-    return true;
-  }, false);
+  return run_on_pjsip<bool>(
+      [this, accounts] {
+        std::lock_guard<std::mutex> lock(mutex_);
+        accounts_ = accounts;
+        LOG_INFO("SIP accounts updated (", accounts_.size(), ")");
+        return true;
+      },
+      false);
 }
 
 bool PjsipSipEngine::add_line(const LineConfig& line, std::string* error) {
@@ -660,94 +662,98 @@ bool PjsipSipEngine::add_line(const LineConfig& line, std::string* error) {
     }
     return false;
   }
-  return run_on_pjsip<bool>([this, line, error]() -> bool {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const SipAccountConfig* account = account_config(line.sip.account);
-    if (account == nullptr) {
-      if (error != nullptr) {
-        *error = "unknown SIP account '" + line.sip.account + "'";
-      }
-      return false;
-    }
-
-    // replace an existing registration for this line
-    const auto existing = lines_.find(line.id);
-    if (existing != lines_.end()) {
-      if (existing->second->account) {
-        try {
-          existing->second->account->shutdown();
-        } catch (const pj::Error&) {
+  return run_on_pjsip<bool>(
+      [this, line, error]() -> bool {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const SipAccountConfig* account = account_config(line.sip.account);
+        if (account == nullptr) {
+          if (error != nullptr) {
+            *error = "unknown SIP account '" + line.sip.account + "'";
+          }
+          return false;
         }
-      }
-      lines_.erase(existing);
-      std::lock_guard<std::mutex> state_lock(state_mutex_);
-      account_index_.erase(line.id);
-    }
 
-    auto context = std::make_unique<LineContext>();
-    context->config = line;
-    context->account = std::make_unique<SipAccount>(this, line.id);
+        // replace an existing registration for this line
+        const auto existing = lines_.find(line.id);
+        if (existing != lines_.end()) {
+          if (existing->second->account) {
+            try {
+              existing->second->account->shutdown();
+            } catch (const pj::Error&) {
+            }
+          }
+          lines_.erase(existing);
+          std::lock_guard<std::mutex> state_lock(state_mutex_);
+          account_index_.erase(line.id);
+        }
 
-    const std::string aor = local_aor(line);
-    pj::AccountConfig account_config;
-    account_config.idUri = aor;
-    if (!account->registrar.empty()) {
-      account_config.regConfig.registrarUri = account->registrar;
-    }
-    account_config.regConfig.timeoutSec =
-        static_cast<unsigned>(std::max(30, config_.registration_timeout));
-    account_config.regConfig.retryIntervalSec =
-        static_cast<unsigned>(std::max(5, config_.retry_interval));
-    account_config.regConfig.firstRetryIntervalSec =
-        static_cast<unsigned>(std::max(5, config_.retry_interval));
-    account_config.regConfig.randomRetryIntervalSec =
-        static_cast<unsigned>(std::max(5, config_.retry_interval));
-    if (!account->outbound_proxy.empty()) {
-      account_config.sipConfig.proxies.push_back(account->outbound_proxy);
-    }
-    if (!account->username.empty()) {
-      account_config.sipConfig.authCreds.push_back(pj::AuthCredInfo(
-          "digest", account->auth_realm, account->username, 0, account->password));
-    }
-    if (config_.keep_alive_interval > 0) {
-      account_config.natConfig.udpKaIntervalSec =
-          static_cast<unsigned>(config_.keep_alive_interval);
-    }
-    const std::string srtp = to_lower(config_.srtp);
-    if (srtp == "mandatory" || srtp == "required") {
-      account_config.mediaConfig.srtpUse = PJMEDIA_SRTP_MANDATORY;
-    } else if (srtp == "optional") {
-      account_config.mediaConfig.srtpUse = PJMEDIA_SRTP_OPTIONAL;
-    } else {
-      account_config.mediaConfig.srtpUse = PJMEDIA_SRTP_DISABLED;
-    }
+        auto context = std::make_unique<LineContext>();
+        context->config = line;
+        context->account = std::make_unique<SipAccount>(this, line.id);
 
-    try {
-      context->account->create(account_config, false);
-    } catch (const pj::Error& err) {
-      if (error != nullptr) {
-        *error = "cannot create the SIP account for line " +
-                 std::to_string(line.id) + ": " + err.info();
-      }
-      LOG_ERROR("line ", line.id, ": cannot create the SIP account: ", err.info());
-      return false;
-    }
+        const std::string aor = local_aor(line);
+        pj::AccountConfig account_config;
+        account_config.idUri = aor;
+        if (!account->registrar.empty()) {
+          account_config.regConfig.registrarUri = account->registrar;
+        }
+        account_config.regConfig.timeoutSec =
+            static_cast<unsigned>(std::max(30, config_.registration_timeout));
+        account_config.regConfig.retryIntervalSec =
+            static_cast<unsigned>(std::max(5, config_.retry_interval));
+        account_config.regConfig.firstRetryIntervalSec =
+            static_cast<unsigned>(std::max(5, config_.retry_interval));
+        account_config.regConfig.randomRetryIntervalSec =
+            static_cast<unsigned>(std::max(5, config_.retry_interval));
+        if (!account->outbound_proxy.empty()) {
+          account_config.sipConfig.proxies.push_back(account->outbound_proxy);
+        }
+        if (!account->username.empty()) {
+          account_config.sipConfig.authCreds.push_back(
+              pj::AuthCredInfo("digest", account->auth_realm, account->username, 0,
+                               account->password));
+        }
+        if (config_.keep_alive_interval > 0) {
+          account_config.natConfig.udpKaIntervalSec =
+              static_cast<unsigned>(config_.keep_alive_interval);
+        }
+        const std::string srtp = to_lower(config_.srtp);
+        if (srtp == "mandatory" || srtp == "required") {
+          account_config.mediaConfig.srtpUse = PJMEDIA_SRTP_MANDATORY;
+        } else if (srtp == "optional") {
+          account_config.mediaConfig.srtpUse = PJMEDIA_SRTP_OPTIONAL;
+        } else {
+          account_config.mediaConfig.srtpUse = PJMEDIA_SRTP_DISABLED;
+        }
 
-    AccountStatus initial;
-    initial.id = account->id;
-    initial.uri = aor;
-    initial.state = "unregistered";
-    {
-      std::lock_guard<std::mutex> state_lock(state_mutex_);
-      account_index_[line.id] = context->account.get();
-      reg_status_[line.id] = initial;
-    }
+        try {
+          context->account->create(account_config, false);
+        } catch (const pj::Error& err) {
+          if (error != nullptr) {
+            *error = "cannot create the SIP account for line " +
+                     std::to_string(line.id) + ": " + err.info();
+          }
+          LOG_ERROR("line ", line.id,
+                    ": cannot create the SIP account: ", err.info());
+          return false;
+        }
 
-    lines_[line.id] = std::move(context);
-    LOG_INFO("line ", line.id, ": registered as ", aor, " through account '",
-             account->id, "'");
-    return true;
-  }, false);
+        AccountStatus initial;
+        initial.id = account->id;
+        initial.uri = aor;
+        initial.state = "unregistered";
+        {
+          std::lock_guard<std::mutex> state_lock(state_mutex_);
+          account_index_[line.id] = context->account.get();
+          reg_status_[line.id] = initial;
+        }
+
+        lines_[line.id] = std::move(context);
+        LOG_INFO("line ", line.id, ": registered as ", aor, " through account '",
+                 account->id, "'");
+        return true;
+      },
+      false);
 }
 
 bool PjsipSipEngine::remove_line(int line_id) {
@@ -756,26 +762,28 @@ bool PjsipSipEngine::remove_line(int line_id) {
     lines_.erase(line_id);
     return true;
   }
-  return run_on_pjsip<bool>([this, line_id] {
-    std::lock_guard<std::mutex> lock(mutex_);
-    teardown_line_media(line_id);
-    const auto it = lines_.find(line_id);
-    if (it != lines_.end()) {
-      if (it->second->account) {
-        try {
-          it->second->account->shutdown();
-        } catch (const pj::Error&) {
+  return run_on_pjsip<bool>(
+      [this, line_id] {
+        std::lock_guard<std::mutex> lock(mutex_);
+        teardown_line_media(line_id);
+        const auto it = lines_.find(line_id);
+        if (it != lines_.end()) {
+          if (it->second->account) {
+            try {
+              it->second->account->shutdown();
+            } catch (const pj::Error&) {
+            }
+          }
+          lines_.erase(it);
         }
-      }
-      lines_.erase(it);
-    }
-    std::lock_guard<std::mutex> state_lock(state_mutex_);
-    account_index_.erase(line_id);
-    reg_status_.erase(line_id);
-    call_status_.erase(line_id);
-    call_connected_at_ms_.erase(line_id);
-    return true;
-  }, false);
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
+        account_index_.erase(line_id);
+        reg_status_.erase(line_id);
+        call_status_.erase(line_id);
+        call_connected_at_ms_.erase(line_id);
+        return true;
+      },
+      false);
 }
 
 // ---------------------------------------------------------------------------
@@ -790,127 +798,136 @@ bool PjsipSipEngine::dial(int line_id, const std::string& target,
     }
     return false;
   }
-  return run_on_pjsip<bool>([this, line_id, target, error]() -> bool {
-    LineContext* context = find(line_id);
-    if (context == nullptr) {
-      if (error != nullptr) {
-        *error = "unknown line " + std::to_string(line_id);
-      }
-      return false;
-    }
-    if (call_for(line_id) != nullptr) {
-      if (error != nullptr) {
-        *error = "line " + std::to_string(line_id) + " already has a call";
-      }
-      return false;
-    }
-    const std::string uri =
-        target.empty() ? context->config.sip.dial_target : target;
-    if (uri.empty()) {
-      if (error != nullptr) {
-        *error = "no dial target configured for line " + std::to_string(line_id);
-      }
-      return false;
-    }
+  return run_on_pjsip<bool>(
+      [this, line_id, target, error]() -> bool {
+        LineContext* context = find(line_id);
+        if (context == nullptr) {
+          if (error != nullptr) {
+            *error = "unknown line " + std::to_string(line_id);
+          }
+          return false;
+        }
+        if (call_for(line_id) != nullptr) {
+          if (error != nullptr) {
+            *error = "line " + std::to_string(line_id) + " already has a call";
+          }
+          return false;
+        }
+        const std::string uri =
+            target.empty() ? context->config.sip.dial_target : target;
+        if (uri.empty()) {
+          if (error != nullptr) {
+            *error =
+                "no dial target configured for line " + std::to_string(line_id);
+          }
+          return false;
+        }
 
-    auto call = std::make_shared<SipCall>(this, line_id, *context->account);
-    try {
-      pj::CallOpParam prm(true);  // use the default call setting
-      prm.opt.audioCount = 1;
-      prm.opt.videoCount = 0;
-      call->makeCall(uri, prm);
-    } catch (const pj::Error& err) {
-      if (error != nullptr) {
-        *error = "cannot call " + uri + ": " + err.info();
-      }
-      return false;
-    }
-    store_call(line_id, call);
-    LOG_INFO("line ", line_id, ": calling ", uri);
-    return true;
-  }, false);
+        auto call = std::make_shared<SipCall>(this, line_id, *context->account);
+        try {
+          pj::CallOpParam prm(true);  // use the default call setting
+          prm.opt.audioCount = 1;
+          prm.opt.videoCount = 0;
+          call->makeCall(uri, prm);
+        } catch (const pj::Error& err) {
+          if (error != nullptr) {
+            *error = "cannot call " + uri + ": " + err.info();
+          }
+          return false;
+        }
+        store_call(line_id, call);
+        LOG_INFO("line ", line_id, ": calling ", uri);
+        return true;
+      },
+      false);
 }
 
 bool PjsipSipEngine::answer(int line_id, std::string* error) {
-  return run_on_pjsip<bool>([this, line_id, error]() -> bool {
-    auto call = call_for(line_id);
-    if (call == nullptr) {
-      if (error != nullptr) {
-        *error = "line " + std::to_string(line_id) + " has no call to answer";
-      }
-      return false;
-    }
-    int code = 200;
-    if (LineContext* context = find(line_id)) {
-      const int configured = context->config.sip.auto_answer_code;
-      if (configured >= 200 && configured < 300) {
-        code = configured;
-      }
-    }
-    try {
-      pj::CallOpParam prm;
-      prm.statusCode = static_cast<pjsip_status_code>(code);
-      call->answer(prm);
-    } catch (const pj::Error& err) {
-      if (error != nullptr) {
-        *error = std::string("cannot answer: ") + err.info();
-      }
-      return false;
-    }
-    LOG_INFO("line ", line_id, ": call answered with ", code);
-    return true;
-  }, false);
+  return run_on_pjsip<bool>(
+      [this, line_id, error]() -> bool {
+        auto call = call_for(line_id);
+        if (call == nullptr) {
+          if (error != nullptr) {
+            *error = "line " + std::to_string(line_id) + " has no call to answer";
+          }
+          return false;
+        }
+        int code = 200;
+        if (LineContext* context = find(line_id)) {
+          const int configured = context->config.sip.auto_answer_code;
+          if (configured >= 200 && configured < 300) {
+            code = configured;
+          }
+        }
+        try {
+          pj::CallOpParam prm;
+          prm.statusCode = static_cast<pjsip_status_code>(code);
+          call->answer(prm);
+        } catch (const pj::Error& err) {
+          if (error != nullptr) {
+            *error = std::string("cannot answer: ") + err.info();
+          }
+          return false;
+        }
+        LOG_INFO("line ", line_id, ": call answered with ", code);
+        return true;
+      },
+      false);
 }
 
 bool PjsipSipEngine::hangup(int line_id, std::string* error) {
-  return run_on_pjsip<bool>([this, line_id, error]() -> bool {
-    auto call = call_for(line_id);
-    if (call == nullptr) {
-      if (error != nullptr) {
-        *error = "line " + std::to_string(line_id) + " has no call";
-      }
-      return false;
-    }
-    try {
-      pj::CallOpParam prm;
-      call->hangup(prm);
-    } catch (const pj::Error& err) {
-      if (error != nullptr) {
-        *error = std::string("cannot hang up: ") + err.info();
-      }
-      return false;
-    }
-    LOG_INFO("line ", line_id, ": call hangup requested");
-    return true;
-  }, false);
+  return run_on_pjsip<bool>(
+      [this, line_id, error]() -> bool {
+        auto call = call_for(line_id);
+        if (call == nullptr) {
+          if (error != nullptr) {
+            *error = "line " + std::to_string(line_id) + " has no call";
+          }
+          return false;
+        }
+        try {
+          pj::CallOpParam prm;
+          call->hangup(prm);
+        } catch (const pj::Error& err) {
+          if (error != nullptr) {
+            *error = std::string("cannot hang up: ") + err.info();
+          }
+          return false;
+        }
+        LOG_INFO("line ", line_id, ": call hangup requested");
+        return true;
+      },
+      false);
 }
 
 bool PjsipSipEngine::set_hold(int line_id, bool hold, std::string* error) {
-  return run_on_pjsip<bool>([this, line_id, hold, error]() -> bool {
-    auto call = call_for(line_id);
-    if (call == nullptr) {
-      if (error != nullptr) {
-        *error = "line " + std::to_string(line_id) + " has no call";
-      }
-      return false;
-    }
-    try {
-      pj::CallOpParam prm(true);
-      prm.opt.audioCount = 1;
-      prm.opt.videoCount = 0;
-      if (!hold) {
-        prm.opt.flag |= PJSUA_CALL_UNHOLD;
-      }
-      call->setHold(prm);
-    } catch (const pj::Error& err) {
-      if (error != nullptr) {
-        *error = std::string("cannot change hold: ") + err.info();
-      }
-      return false;
-    }
-    LOG_INFO("line ", line_id, ": call ", hold ? "held" : "resumed");
-    return true;
-  }, false);
+  return run_on_pjsip<bool>(
+      [this, line_id, hold, error]() -> bool {
+        auto call = call_for(line_id);
+        if (call == nullptr) {
+          if (error != nullptr) {
+            *error = "line " + std::to_string(line_id) + " has no call";
+          }
+          return false;
+        }
+        try {
+          pj::CallOpParam prm(true);
+          prm.opt.audioCount = 1;
+          prm.opt.videoCount = 0;
+          if (!hold) {
+            prm.opt.flag |= PJSUA_CALL_UNHOLD;
+          }
+          call->setHold(prm);
+        } catch (const pj::Error& err) {
+          if (error != nullptr) {
+            *error = std::string("cannot change hold: ") + err.info();
+          }
+          return false;
+        }
+        LOG_INFO("line ", line_id, ": call ", hold ? "held" : "resumed");
+        return true;
+      },
+      false);
 }
 
 bool PjsipSipEngine::send_dtmf(int line_id, const std::string& digits,
@@ -918,25 +935,27 @@ bool PjsipSipEngine::send_dtmf(int line_id, const std::string& digits,
   if (digits.empty()) {
     return true;
   }
-  return run_on_pjsip<bool>([this, line_id, digits, error]() -> bool {
-    auto call = call_for(line_id);
-    if (call == nullptr) {
-      if (error != nullptr) {
-        *error = "line " + std::to_string(line_id) + " has no call";
-      }
-      return false;
-    }
-    try {
-      call->dialDtmf(digits);
-    } catch (const pj::Error& err) {
-      if (error != nullptr) {
-        *error = std::string("cannot send DTMF: ") + err.info();
-      }
-      return false;
-    }
-    LOG_INFO("line ", line_id, ": DTMF '", digits, "' sent");
-    return true;
-  }, false);
+  return run_on_pjsip<bool>(
+      [this, line_id, digits, error]() -> bool {
+        auto call = call_for(line_id);
+        if (call == nullptr) {
+          if (error != nullptr) {
+            *error = "line " + std::to_string(line_id) + " has no call";
+          }
+          return false;
+        }
+        try {
+          call->dialDtmf(digits);
+        } catch (const pj::Error& err) {
+          if (error != nullptr) {
+            *error = std::string("cannot send DTMF: ") + err.info();
+          }
+          return false;
+        }
+        LOG_INFO("line ", line_id, ": DTMF '", digits, "' sent");
+        return true;
+      },
+      false);
 }
 
 // ---------------------------------------------------------------------------

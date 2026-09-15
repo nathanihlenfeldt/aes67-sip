@@ -14,14 +14,14 @@ enum class PcmFormat { kS16Le, kS24_3Le, kS32Le };
 enum class AudioBackendKind { kRavenna, kNull };
 
 struct AudioConfig {
-  std::string backend{"ravenna"};      // ravenna | null
+  std::string backend{"ravenna"};  // ravenna | null
   std::string device{"plughw:RAVENNA"};
-  unsigned sample_rate{48000};         // AES67 native rate, do not change
-  unsigned channels{16};               // channels opened on the RAVENNA device
-  unsigned period_frames{48};          // 1 ms at 48 kHz, matches the daemon
+  unsigned sample_rate{48000};  // AES67 native rate, do not change
+  unsigned channels{16};        // channels opened on the RAVENNA device
+  unsigned period_frames{48};   // 1 ms at 48 kHz, matches the daemon
   unsigned periods{3};
-  std::string format{"s16_le"};        // s16_le | s24_3le | s32_le
-  double null_tone_hz{0.0};            // null backend test tone (0 = silence)
+  std::string format{"s16_le"};  // s16_le | s24_3le | s32_le
+  double null_tone_hz{0.0};      // null backend test tone (0 = silence)
 
   AudioBackendKind backend_kind() const;
   PcmFormat pcm_format() const;
@@ -35,7 +35,7 @@ struct Aes67DaemonConfig {
   std::string address{"127.0.0.1"};
   int port{8080};
   bool fake{false};
-  bool auto_configure{true};           // create/update streams from line config
+  bool auto_configure{true};  // create/update streams from line config
   unsigned sink_delay_samples{576};
   int source_payload_type{98};
   int source_ttl{15};
@@ -56,8 +56,8 @@ struct SipAccountConfig {
 
 struct SipConfig {
   bool enabled{true};
-  std::string engine{"pjsip"};         // pjsip | fake
-  std::string transport{"udp"};        // udp | tcp | tls
+  std::string engine{"pjsip"};   // pjsip | fake
+  std::string transport{"udp"};  // udp | tcp | tls
   int local_port{5060};
   std::vector<std::string> codecs{"G722/16000/1", "PCMU/8000/1", "PCMA/8000/1"};
   int ptime_ms{20};
@@ -65,15 +65,15 @@ struct SipConfig {
   int retry_interval{30};
   int keep_alive_interval{15};
   std::string stun_server;
-  std::string srtp{"disabled"};        // disabled | optional | mandatory
+  std::string srtp{"disabled"};  // disabled | optional | mandatory
 };
 
 /** AES67 side of a line: which RAVENNA channels carry the intercom audio. */
 struct LineAes67Config {
-  int sink_id{0};                      // daemon sink = endpoint -> gateway
-  int source_id{0};                    // daemon source = gateway -> endpoint
+  int sink_id{0};    // daemon sink = endpoint -> gateway
+  int source_id{0};  // daemon source = gateway -> endpoint
   std::vector<unsigned> channels{0, 1};
-  std::string stream_name;             // defaults to the line name
+  std::string stream_name;  // defaults to the line name
   bool auto_create_streams{true};
   /**
    * Where the *endpoint's* stream description comes from: the sink has to
@@ -82,7 +82,7 @@ struct LineAes67Config {
    */
   std::string remote_source_id;
   std::string remote_sdp;
-  bool ignore_refclk_gmid{false};      // skip the SDP/PTP grandmaster check
+  bool ignore_refclk_gmid{false};  // skip the SDP/PTP grandmaster check
 };
 
 /**
@@ -95,7 +95,7 @@ struct LineAes67Config {
  */
 struct LineSipConfig {
   std::string account{"pbx"};
-  std::string extension;               // local AOR; defaults to account username
+  std::string extension;  // local AOR; defaults to account username
   std::string display_name;
   std::string call_mode{"manual"};
   std::string dial_target;
@@ -108,9 +108,9 @@ struct LineConfig {
   int id{0};
   std::string name;
   bool enabled{true};
-  double gain_db{0.0};                 // applied to both directions
-  double rx_gain_db{0.0};              // remote -> AES67
-  double tx_gain_db{0.0};              // AES67 -> remote
+  double gain_db{0.0};     // applied to both directions
+  double rx_gain_db{0.0};  // remote -> AES67
+  double tx_gain_db{0.0};  // AES67 -> remote
   bool mute{false};
   LineAes67Config aes67;
   LineSipConfig sip;
@@ -125,7 +125,7 @@ struct Config {
   std::string http_addr{"0.0.0.0"};
   int http_port{8081};
   std::string webui_dir{"/usr/local/share/aes67-sip/webui"};
-  bool webui_api_auth{false};          // reserved: HTTP basic auth for the API
+  bool webui_api_auth{false};  // reserved: HTTP basic auth for the API
   AudioConfig audio;
   Aes67DaemonConfig aes67_daemon;
   SipConfig sip;

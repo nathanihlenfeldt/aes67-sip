@@ -57,7 +57,7 @@ int LineManager::line_count() const {
 }
 
 std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
-                                             std::string* error) {
+                                              std::string* error) {
   // 1. an SDP pasted into the configuration wins
   if (!trim(line.aes67.remote_sdp).empty()) {
     return line.aes67.remote_sdp;
@@ -71,7 +71,8 @@ std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
       const auto it = discovered.find("remote_sources");
       if (it != discovered.end() && it->is_array()) {
         for (const auto& source : *it) {
-          if (json_get<std::string>(source, "id", "") == line.aes67.remote_source_id) {
+          if (json_get<std::string>(source, "id", "") ==
+              line.aes67.remote_source_id) {
             const std::string sdp = json_get<std::string>(source, "sdp", "");
             if (!trim(sdp).empty()) {
               return sdp;
@@ -94,13 +95,15 @@ std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
   std::string own_sdp;
   std::string sdp_error;
   if (daemon_->get_source_sdp(line.aes67.source_id, &own_sdp, &sdp_error)) {
-    LOG_INFO("line ", line.id, ": no endpoint SDP configured, looping back AES67 "
-             "source ", line.aes67.source_id, " for commissioning");
+    LOG_INFO("line ", line.id,
+             ": no endpoint SDP configured, looping back AES67 "
+             "source ",
+             line.aes67.source_id, " for commissioning");
     return own_sdp;
   }
   if (error != nullptr) {
-    *error = "no endpoint SDP for line " + std::to_string(line.id) + ": " +
-             sdp_error;
+    *error =
+        "no endpoint SDP for line " + std::to_string(line.id) + ": " + sdp_error;
   }
   return {};
 }
@@ -151,8 +154,8 @@ void LineManager::configure_daemon_streams(const LineConfig& line) {
     LOG_INFO("line ", line.id, ": AES67 sink ", line.aes67.sink_id, " '",
              line.aes67.stream_name, "' configured");
   } else {
-    LOG_WARN("line ", line.id, ": cannot configure AES67 sink ",
-             line.aes67.sink_id, ": ", error);
+    LOG_WARN("line ", line.id, ": cannot configure AES67 sink ", line.aes67.sink_id,
+             ": ", error);
   }
 }
 
@@ -606,8 +609,8 @@ bool LineManager::update_line(int line_id, const json& patch, std::string* error
   if (engine_ != nullptr) {
     std::string engine_error;
     if (!engine_->add_line(merged, &engine_error)) {
-      LOG_WARN("line ", line_id, ": cannot update the SIP registration: ",
-               engine_error);
+      LOG_WARN("line ", line_id,
+               ": cannot update the SIP registration: ", engine_error);
     }
   }
   apply_line_to_router(merged);
@@ -678,7 +681,7 @@ json LineManager::self_test() {
   json checks = json::array();
   bool all_ok = true;
   const auto add = [&checks, &all_ok](const std::string& name, bool ok,
-                                     const std::string& detail) {
+                                      const std::string& detail) {
     all_ok = all_ok && ok;
     checks.push_back(json{{"name", name}, {"ok", ok}, {"detail", detail}});
   };
@@ -730,8 +733,10 @@ json LineManager::self_test() {
     }
     const std::string state = json_get<std::string>(status, "state", "unknown");
     const bool enabled = json_get<bool>(status, "enabled", true);
-    const bool receiving = json_get_path<bool>(status, {"aes67", "receiving"}, false);
-    const double capture = json_get_path<double>(status, {"levels", "aes67_dbfs"}, -1000.0);
+    const bool receiving =
+        json_get_path<bool>(status, {"aes67", "receiving"}, false);
+    const double capture =
+        json_get_path<double>(status, {"levels", "aes67_dbfs"}, -1000.0);
 
     std::ostringstream detail;
     detail << state;
@@ -750,6 +755,3 @@ json LineManager::self_test() {
 }
 
 }  // namespace aes67sip
-
-
-

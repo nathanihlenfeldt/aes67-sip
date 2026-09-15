@@ -60,7 +60,8 @@ void NullAudioBackend::fill_tone(float* destination, unsigned frames) {
   }
 }
 
-bool NullAudioBackend::read(float* destination, unsigned frames, std::string* error) {
+bool NullAudioBackend::read(float* destination, unsigned frames,
+                            std::string* error) {
   (void)error;
   if (!open_) {
     return false;
@@ -68,9 +69,9 @@ bool NullAudioBackend::read(float* destination, unsigned frames, std::string* er
   fill_tone(destination, frames);
 
   // emulate the device cadence so the routing thread runs at real speed
-  const auto period = std::chrono::nanoseconds(
-      static_cast<long long>(frames) * 1000000000LL /
-      static_cast<long long>(format_.sample_rate));
+  const auto period =
+      std::chrono::nanoseconds(static_cast<long long>(frames) * 1000000000LL /
+                               static_cast<long long>(format_.sample_rate));
   next_deadline_ += period;
   const auto now = std::chrono::steady_clock::now();
   if (next_deadline_ > now) {
@@ -82,7 +83,8 @@ bool NullAudioBackend::read(float* destination, unsigned frames, std::string* er
   return true;
 }
 
-bool NullAudioBackend::write(const float* source, unsigned frames, std::string* error) {
+bool NullAudioBackend::write(const float* source, unsigned frames,
+                             std::string* error) {
   (void)error;
   if (!open_) {
     return false;

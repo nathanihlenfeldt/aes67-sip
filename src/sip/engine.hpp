@@ -25,7 +25,8 @@ const char* to_string(LineState state);
 /** Registration state of one SIP account. */
 struct AccountStatus {
   std::string id;
-  std::string state{"unregistered"};  // registered | registering | unregistered | error
+  std::string state{
+      "unregistered"};  // registered | registering | unregistered | error
   std::string uri;
   std::string error;
 };
@@ -97,7 +98,8 @@ class SipEngine {
   virtual bool answer(int line_id, std::string* error) = 0;
   virtual bool hangup(int line_id, std::string* error) = 0;
   virtual bool set_hold(int line_id, bool hold, std::string* error) = 0;
-  virtual bool send_dtmf(int line_id, const std::string& digits, std::string* error) = 0;
+  virtual bool send_dtmf(int line_id, const std::string& digits,
+                         std::string* error) = 0;
 
   virtual CallStatus call_status(int line_id) const = 0;
 
@@ -136,7 +138,8 @@ class StubSipEngine : public SipEngine {
   bool answer(int line_id, std::string* error) override;
   bool hangup(int line_id, std::string* error) override;
   bool set_hold(int line_id, bool hold, std::string* error) override;
-  bool send_dtmf(int line_id, const std::string& digits, std::string* error) override;
+  bool send_dtmf(int line_id, const std::string& digits,
+                 std::string* error) override;
   CallStatus call_status(int line_id) const override;
 
   /** Test hook: pretends the PBX is calling `line_id`. */

@@ -52,8 +52,8 @@ class Resampler {
   unsigned channels_{1};
   unsigned taps_{16};
   bool integer_ratio_{true};
-  unsigned up_{1};     // L
-  unsigned down_{1};   // M
+  unsigned up_{1};    // L
+  unsigned down_{1};  // M
 
   // prototype filter, `taps_` coefficients per phase, `up_` phases
   std::vector<double> filter_;

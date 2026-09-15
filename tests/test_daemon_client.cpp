@@ -12,11 +12,11 @@ Aes67DaemonConfig fake_daemon_config() {
 }
 
 LineConfig make_line(int id, const std::vector<unsigned>& channels) {
-  const json document{{"id", id},
-                      {"name", "Line " + std::to_string(id)},
-                      {"aes67", {{"sink_id", id}, {"source_id", id},
-                                 {"channels", channels}}},
-                      {"sip", {{"extension", "100" + std::to_string(id)}}}};
+  const json document{
+      {"id", id},
+      {"name", "Line " + std::to_string(id)},
+      {"aes67", {{"sink_id", id}, {"source_id", id}, {"channels", channels}}},
+      {"sip", {{"extension", "100" + std::to_string(id)}}}};
   return Config::parse_line(document);
 }
 

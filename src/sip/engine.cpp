@@ -132,8 +132,8 @@ struct StubSipEngine::Impl {
           }
         }
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(
-          busy ? std::max(1U, ptime_ms) : 20U));
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(busy ? std::max(1U, ptime_ms) : 20U));
     }
   }
 
@@ -188,8 +188,9 @@ bool StubSipEngine::start(std::string* error) {
   impl_->running = true;
   impl_->worker = std::thread([this] { impl_->work(); });
   impl_->media_worker = std::thread([this] { impl_->media_loop(); });
-  LOG_WARN("SIP engine is the stub: calls are simulated and no SIP signalling "
-           "is performed (use the pjsip engine in production)");
+  LOG_WARN(
+      "SIP engine is the stub: calls are simulated and no SIP signalling "
+      "is performed (use the pjsip engine in production)");
   return true;
 }
 
@@ -393,5 +394,3 @@ bool StubSipEngine::simulate_incoming_call(int line_id,
 }
 
 }  // namespace aes67sip
-
-

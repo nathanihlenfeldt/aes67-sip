@@ -103,8 +103,9 @@ std::string join(const std::vector<std::string>& values,
 
 std::string to_lower(const std::string& value) {
   std::string result = value;
-  std::transform(result.begin(), result.end(), result.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
   return result;
 }
 

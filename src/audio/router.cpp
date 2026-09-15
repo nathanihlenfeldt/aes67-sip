@@ -140,7 +140,8 @@ void AudioRouter::set_line_rate_locked(Line& line, unsigned rate) {
 // control side
 // ---------------------------------------------------------------------------
 
-void AudioRouter::add_line(int line_id, const LineParams& params, unsigned sip_rate) {
+void AudioRouter::add_line(int line_id, const LineParams& params,
+                           unsigned sip_rate) {
   auto fresh = std::make_shared<Line>();
   fresh->params = params;
   fresh->pending_rate = sip_rate == 0 ? 8000 : sip_rate;
@@ -183,16 +184,17 @@ void AudioRouter::set_line_gain_db(int line_id, double gain_db) {
 }
 
 void AudioRouter::set_line_channels(int line_id,
-                                   const std::vector<unsigned>& channels) {
+                                    const std::vector<unsigned>& channels) {
   with_line(line_id, [&](Line& line) { line.params.channels = channels; });
 }
 
 void AudioRouter::set_line_sip_rate(int line_id, unsigned rate) {
-  with_line(line_id, [&](Line& line) { line.pending_rate = rate == 0 ? 8000 : rate; });
+  with_line(line_id,
+            [&](Line& line) { line.pending_rate = rate == 0 ? 8000 : rate; });
 }
 
 void AudioRouter::set_line_ptt_params(int line_id, double threshold_dbfs,
-                                     int hold_ms) {
+                                      int hold_ms) {
   with_line(line_id, [&](Line& line) {
     line.params.ptt_threshold_dbfs = threshold_dbfs;
     line.params.ptt_hold_ms = std::max(0, hold_ms);
@@ -220,8 +222,8 @@ bool AudioRouter::test_tone_running(int line_id) const {
 void AudioRouter::process_block() {
   const unsigned frames = format_.period_frames;
   const unsigned channels = format_.channels;
-  const double decay_db =
-      kPeakDecayDbPerMs * 1000.0 * frames / static_cast<double>(format_.sample_rate);
+  const double decay_db = kPeakDecayDbPerMs * 1000.0 * frames /
+                          static_cast<double>(format_.sample_rate);
   const double now = monotonic_seconds();
   const int64_t now_ms_value = now_ms();
 
@@ -291,7 +293,8 @@ void AudioRouter::process_block() {
     }
 
     const double block_peak = peak_dbfs(line.downmix.data(), line.downmix.size());
-    line.capture_peak_db = hold_peak(line.capture_peak_db.load(), block_peak, decay_db);
+    line.capture_peak_db =
+        hold_peak(line.capture_peak_db.load(), block_peak, decay_db);
     line.clipping = block_peak > -0.01;  // about 1 dB of headroom left
     if (block_peak > params.ptt_threshold_dbfs) {
       line.ptt = true;
@@ -313,8 +316,8 @@ void AudioRouter::process_block() {
       if (line.resampled.size() < capacity) {
         line.resampled.resize(capacity, 0.0F);
       }
-      const size_t produced = line.to_sip->process(line.downmix.data(), frames,
-                                                   line.resampled.data());
+      const size_t produced =
+          line.to_sip->process(line.downmix.data(), frames, line.resampled.data());
       const size_t written = line.tx_ring.write(line.resampled.data(), produced);
       line.tx_frames += written;
       if (written < produced) {
@@ -350,9 +353,9 @@ void AudioRouter::process_block() {
           line.rx_mono[i] = static_cast<float>(line.rx_mono[i] * rx_gain);
         }
       }
-      line.from_sip_db = hold_peak(
-          line.from_sip_db.load(), peak_dbfs(line.rx_mono.data(), rx_needed),
-          decay_db);
+      line.from_sip_db =
+          hold_peak(line.from_sip_db.load(),
+                    peak_dbfs(line.rx_mono.data(), rx_needed), decay_db);
     } else {
       line.rx_ring.discard(line.rx_ring.available());
       std::fill(line.rx_mono.begin(),
@@ -403,13 +406,12 @@ void AudioRouter::process_block() {
     sample = std::max(-1.0F, std::min(1.0F, sample));
   }
   for (unsigned channel = 0; channel < channels; ++channel) {
-    playback_channel_db_[channel] = hold_peak(
-        playback_channel_db_[channel],
-        interleaved_rms_dbfs(playback_.data(), frames, channels, channel), decay_db);
+    playback_channel_db_[channel] =
+        hold_peak(playback_channel_db_[channel],
+                  interleaved_rms_dbfs(playback_.data(), frames, channels, channel),
+                  decay_db);
   }
 }
-
-
 
 // ---------------------------------------------------------------------------
 // monitoring side
@@ -507,5 +509,3 @@ void AudioRouter::push_from_sip(int line_id, const float* source, size_t frames)
 }
 
 }  // namespace aes67sip
-
-

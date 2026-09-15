@@ -78,7 +78,8 @@ std::string trim(const std::string& value);
 std::vector<std::string> split(const std::string& value, char delimiter);
 
 /** Joins values with a delimiter. */
-std::string join(const std::vector<std::string>& values, const std::string& delimiter);
+std::string join(const std::vector<std::string>& values,
+                 const std::string& delimiter);
 
 /** Lower cases an ASCII string. */
 std::string to_lower(const std::string& value);

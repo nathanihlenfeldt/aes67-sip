@@ -65,9 +65,8 @@ std::string path_group(const httplib::Request& request, size_t index) {
 
 }  // namespace
 
-ApiServer::ApiServer(Config* config, std::string config_path,
-                     DaemonClient* daemon, AudioRouter* router,
-                     LineManager* lines, SipEngine* engine)
+ApiServer::ApiServer(Config* config, std::string config_path, DaemonClient* daemon,
+                     AudioRouter* router, LineManager* lines, SipEngine* engine)
     : config_(config),
       config_path_(std::move(config_path)),
       daemon_(daemon),
@@ -94,8 +93,7 @@ json ApiServer::build_status() const {
   json status;
   status["version"] = version();
   status["build"] = build_info();
-  status["uptime_sec"] =
-      static_cast<int64_t>((now_ms() - started_at_ms_) / 1000);
+  status["uptime_sec"] = static_cast<int64_t>((now_ms() - started_at_ms_) / 1000);
 
   json audio;
   audio["backend"] = router_->backend_kind();
@@ -126,9 +124,8 @@ json ApiServer::build_status() const {
   PtpStatus ptp;
   std::string ptp_error;
   if (daemon_->get_ptp_status(&ptp, &ptp_error)) {
-    aes67["ptp"] = json{{"status", ptp.status},
-                        {"gmid", ptp.gmid},
-                        {"jitter", ptp.jitter}};
+    aes67["ptp"] =
+        json{{"status", ptp.status}, {"gmid", ptp.gmid}, {"jitter", ptp.jitter}};
   } else {
     aes67["ptp"] = json{{"status", "unknown"}, {"gmid", ""}, {"jitter", 0}};
   }
@@ -166,47 +163,52 @@ void ApiServer::register_routes() {
   svr->Options("/api/.*", [](const httplib::Request&, httplib::Response& response) {
     response.status = 204;
     response.set_header("Access-Control-Allow-Origin", "*");
-    response.set_header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+    response.set_header("Access-Control-Allow-Methods",
+                        "GET,POST,PUT,DELETE,OPTIONS");
     response.set_header("Access-Control-Allow-Headers", "Content-Type");
   });
 
-  svr->Get("/api/version", [](const httplib::Request&, httplib::Response& response) {
-    reply_json(response, json{{"name", "aes67-sip"},
-                              {"version", version()},
-                              {"build", build_info()}});
-  });
+  svr->Get("/api/version",
+           [](const httplib::Request&, httplib::Response& response) {
+             reply_json(response, json{{"name", "aes67-sip"},
+                                       {"version", version()},
+                                       {"build", build_info()}});
+           });
 
-  svr->Get("/api/config", [this](const httplib::Request&, httplib::Response& response) {
-    reply_json(response, config_->to_json());
-  });
+  svr->Get("/api/config",
+           [this](const httplib::Request&, httplib::Response& response) {
+             reply_json(response, config_->to_json());
+           });
 
-  svr->Post("/api/config", [this](const httplib::Request& request,
-                                  httplib::Response& response) {
-    std::string error;
-    const json patch = parse_body(request, &error);
-    if (patch.is_null()) {
-      reply_error(response, 400, error);
-      return;
-    }
-    config_->merge(patch);
-    if (!config_->save(config_path_, &error)) {
-      reply_error(response, 500, error);
-      return;
-    }
-    if (restart_ && !restart_(&error)) {
-      reply_error(response, 500, error);
-      return;
-    }
-    reply_json(response, config_->to_json());
-  });
+  svr->Post("/api/config",
+            [this](const httplib::Request& request, httplib::Response& response) {
+              std::string error;
+              const json patch = parse_body(request, &error);
+              if (patch.is_null()) {
+                reply_error(response, 400, error);
+                return;
+              }
+              config_->merge(patch);
+              if (!config_->save(config_path_, &error)) {
+                reply_error(response, 500, error);
+                return;
+              }
+              if (restart_ && !restart_(&error)) {
+                reply_error(response, 500, error);
+                return;
+              }
+              reply_json(response, config_->to_json());
+            });
 
-  svr->Get("/api/status", [this](const httplib::Request&, httplib::Response& response) {
-    reply_json(response, build_status());
-  });
+  svr->Get("/api/status",
+           [this](const httplib::Request&, httplib::Response& response) {
+             reply_json(response, build_status());
+           });
 
-  svr->Get("/api/lines", [this](const httplib::Request&, httplib::Response& response) {
-    reply_json(response, lines_->lines_status());
-  });
+  svr->Get("/api/lines",
+           [this](const httplib::Request&, httplib::Response& response) {
+             reply_json(response, lines_->lines_status());
+           });
 
   svr->Get(R"(/api/lines/([0-9]+))", [this](const httplib::Request& request,
                                             httplib::Response& response) {
@@ -223,66 +225,67 @@ void ApiServer::register_routes() {
     reply_json(response, status);
   });
 
-  svr->Get(R"(/api/lines/([0-9]+)/config)", [this](const httplib::Request& request,
-                                                   httplib::Response& response) {
-    int line_id = 0;
-    if (!path_int(request, &line_id)) {
-      reply_error(response, 400, "invalid line id");
-      return;
-    }
-    json config;
-    std::string error;
-    if (!lines_->line_config(line_id, &config, &error)) {
-      reply_error(response, 404, error);
-      return;
-    }
-    reply_json(response, config);
-  });
+  svr->Get(R"(/api/lines/([0-9]+)/config)",
+           [this](const httplib::Request& request, httplib::Response& response) {
+             int line_id = 0;
+             if (!path_int(request, &line_id)) {
+               reply_error(response, 400, "invalid line id");
+               return;
+             }
+             json config;
+             std::string error;
+             if (!lines_->line_config(line_id, &config, &error)) {
+               reply_error(response, 404, error);
+               return;
+             }
+             reply_json(response, config);
+           });
 
-  svr->Post(R"(/api/lines/([0-9]+)/config)", [this](const httplib::Request& request,
-                                                    httplib::Response& response) {
-    int line_id = 0;
-    if (!path_int(request, &line_id)) {
-      reply_error(response, 400, "invalid line id");
-      return;
-    }
-    std::string error;
-    const json patch = parse_body(request, &error);
-    if (patch.is_null()) {
-      reply_error(response, 400, error);
-      return;
-    }
-    if (!lines_->update_line(line_id, patch, &error)) {
-      reply_error(response, 400, error);
-      return;
-    }
-    reply_json(response, lines_->line_status(line_id));
-  });
+  svr->Post(R"(/api/lines/([0-9]+)/config)",
+            [this](const httplib::Request& request, httplib::Response& response) {
+              int line_id = 0;
+              if (!path_int(request, &line_id)) {
+                reply_error(response, 400, "invalid line id");
+                return;
+              }
+              std::string error;
+              const json patch = parse_body(request, &error);
+              if (patch.is_null()) {
+                reply_error(response, 400, error);
+                return;
+              }
+              if (!lines_->update_line(line_id, patch, &error)) {
+                reply_error(response, 400, error);
+                return;
+              }
+              reply_json(response, lines_->line_status(line_id));
+            });
 
-  svr->Post(R"(/api/lines/([0-9]+)/call)", [this](const httplib::Request& request,
-                                                  httplib::Response& response) {
-    int line_id = 0;
-    if (!path_int(request, &line_id)) {
-      reply_error(response, 400, "invalid line id");
-      return;
-    }
-    std::string error;
-    const json body = parse_body(request, &error);
-    if (body.is_null()) {
-      reply_error(response, 400, error);
-      return;
-    }
-    const std::string action = json_get<std::string>(body, "action", "");
-    if (action.empty()) {
-      reply_error(response, 400, "missing 'action'");
-      return;
-    }
-    if (!lines_->call_action(line_id, action, body, &error)) {
-      reply_error(response, 400, error);
-      return;
-    }
-    reply_json(response, json{{"ok", true}, {"line", lines_->line_status(line_id)}});
-  });
+  svr->Post(R"(/api/lines/([0-9]+)/call)",
+            [this](const httplib::Request& request, httplib::Response& response) {
+              int line_id = 0;
+              if (!path_int(request, &line_id)) {
+                reply_error(response, 400, "invalid line id");
+                return;
+              }
+              std::string error;
+              const json body = parse_body(request, &error);
+              if (body.is_null()) {
+                reply_error(response, 400, error);
+                return;
+              }
+              const std::string action = json_get<std::string>(body, "action", "");
+              if (action.empty()) {
+                reply_error(response, 400, "missing 'action'");
+                return;
+              }
+              if (!lines_->call_action(line_id, action, body, &error)) {
+                reply_error(response, 400, error);
+                return;
+              }
+              reply_json(response, json{{"ok", true},
+                                        {"line", lines_->line_status(line_id)}});
+            });
 
   svr->Get(R"(/api/lines/([0-9]+)/levels)", [this](const httplib::Request& request,
                                                    httplib::Response& response) {
@@ -299,7 +302,8 @@ void ApiServer::register_routes() {
     reply_json(response, status.value("levels", json::object()));
   });
 
-  svr->Get("/api/log", [](const httplib::Request& request, httplib::Response& response) {
+  svr->Get("/api/log", [](const httplib::Request& request,
+                          httplib::Response& response) {
     size_t count = 200;
     if (request.has_param("lines")) {
       try {
@@ -325,37 +329,37 @@ void ApiServer::register_routes() {
     reply_json(response, json{{"ok", true}});
   });
 
-  svr->Post("/api/system/self-test", [this](const httplib::Request&,
-                                            httplib::Response& response) {
-    reply_json(response, lines_->self_test());
-  });
+  svr->Post("/api/system/self-test",
+            [this](const httplib::Request&, httplib::Response& response) {
+              reply_json(response, lines_->self_test());
+            });
 
   // ---- AES67 daemon passthrough ------------------------------------------
-  svr->Get("/api/aes67/config", [this](const httplib::Request&,
-                                       httplib::Response& response) {
-    json daemon_config;
-    std::string error;
-    if (!daemon_->get_config(&daemon_config, &error)) {
-      reply_error(response, 502, error);
-      return;
-    }
-    reply_json(response, daemon_config);
-  });
+  svr->Get("/api/aes67/config",
+           [this](const httplib::Request&, httplib::Response& response) {
+             json daemon_config;
+             std::string error;
+             if (!daemon_->get_config(&daemon_config, &error)) {
+               reply_error(response, 502, error);
+               return;
+             }
+             reply_json(response, daemon_config);
+           });
 
-  svr->Post("/api/aes67/config", [this](const httplib::Request& request,
-                                        httplib::Response& response) {
-    std::string error;
-    const json body = parse_body(request, &error);
-    if (body.is_null()) {
-      reply_error(response, 400, error);
-      return;
-    }
-    if (!daemon_->set_config(body, &error)) {
-      reply_error(response, 502, error);
-      return;
-    }
-    reply_json(response, json{{"ok", true}});
-  });
+  svr->Post("/api/aes67/config",
+            [this](const httplib::Request& request, httplib::Response& response) {
+              std::string error;
+              const json body = parse_body(request, &error);
+              if (body.is_null()) {
+                reply_error(response, 400, error);
+                return;
+              }
+              if (!daemon_->set_config(body, &error)) {
+                reply_error(response, 502, error);
+                return;
+              }
+              reply_json(response, json{{"ok", true}});
+            });
 
   svr->Get("/api/aes67/ptp/status", [this](const httplib::Request&,
                                            httplib::Response& response) {
@@ -365,43 +369,44 @@ void ApiServer::register_routes() {
       reply_error(response, 502, error);
       return;
     }
-    reply_json(response, json{{"status", ptp.status},
-                              {"gmid", ptp.gmid},
-                              {"jitter", ptp.jitter}});
+    reply_json(
+        response,
+        json{{"status", ptp.status}, {"gmid", ptp.gmid}, {"jitter", ptp.jitter}});
   });
 
-  svr->Get("/api/aes67/sinks", [this](const httplib::Request&,
-                                      httplib::Response& response) {
-    json sinks;
-    std::string error;
-    if (!daemon_->get_sinks(&sinks, &error)) {
-      reply_error(response, 502, error);
-      return;
-    }
-    reply_json(response, sinks);
-  });
+  svr->Get("/api/aes67/sinks",
+           [this](const httplib::Request&, httplib::Response& response) {
+             json sinks;
+             std::string error;
+             if (!daemon_->get_sinks(&sinks, &error)) {
+               reply_error(response, 502, error);
+               return;
+             }
+             reply_json(response, sinks);
+           });
 
-  svr->Get("/api/aes67/sources", [this](const httplib::Request&,
-                                        httplib::Response& response) {
-    json sources;
-    std::string error;
-    if (!daemon_->get_sources(&sources, &error)) {
-      reply_error(response, 502, error);
-      return;
-    }
-    reply_json(response, sources);
-  });
-
-  svr->Get(R"(/api/aes67/browse/sources/(all|mdns|sap))",
-           [this](const httplib::Request& request, httplib::Response& response) {
+  svr->Get("/api/aes67/sources",
+           [this](const httplib::Request&, httplib::Response& response) {
              json sources;
              std::string error;
-             if (!daemon_->browse_sources(path_group(request, 1), &sources, &error)) {
+             if (!daemon_->get_sources(&sources, &error)) {
                reply_error(response, 502, error);
                return;
              }
              reply_json(response, sources);
            });
+
+  svr->Get(
+      R"(/api/aes67/browse/sources/(all|mdns|sap))",
+      [this](const httplib::Request& request, httplib::Response& response) {
+        json sources;
+        std::string error;
+        if (!daemon_->browse_sources(path_group(request, 1), &sources, &error)) {
+          reply_error(response, 502, error);
+          return;
+        }
+        reply_json(response, sources);
+      });
 
   svr->Get(R"(/api/aes67/source/sdp/([0-9]+))",
            [this](const httplib::Request& request, httplib::Response& response) {
@@ -420,25 +425,25 @@ void ApiServer::register_routes() {
              response.set_content(sdp, "application/sdp");
            });
 
-  svr->Put(R"(/api/aes67/sinks/([0-9]+))", [this](const httplib::Request& request,
-                                                  httplib::Response& response) {
-    int sink_id = 0;
-    if (!path_int(request, &sink_id)) {
-      reply_error(response, 400, "invalid sink id");
-      return;
-    }
-    std::string error;
-    const json body = parse_body(request, &error);
-    if (body.is_null()) {
-      reply_error(response, 400, error);
-      return;
-    }
-    if (!daemon_->put_sink(sink_id, body, &error)) {
-      reply_error(response, 502, error);
-      return;
-    }
-    reply_json(response, json{{"ok", true}});
-  });
+  svr->Put(R"(/api/aes67/sinks/([0-9]+))",
+           [this](const httplib::Request& request, httplib::Response& response) {
+             int sink_id = 0;
+             if (!path_int(request, &sink_id)) {
+               reply_error(response, 400, "invalid sink id");
+               return;
+             }
+             std::string error;
+             const json body = parse_body(request, &error);
+             if (body.is_null()) {
+               reply_error(response, 400, error);
+               return;
+             }
+             if (!daemon_->put_sink(sink_id, body, &error)) {
+               reply_error(response, 502, error);
+               return;
+             }
+             reply_json(response, json{{"ok", true}});
+           });
 
   svr->Delete(R"(/api/aes67/sinks/([0-9]+))",
               [this](const httplib::Request& request, httplib::Response& response) {
@@ -455,25 +460,25 @@ void ApiServer::register_routes() {
                 reply_json(response, json{{"ok", true}});
               });
 
-  svr->Put(R"(/api/aes67/sources/([0-9]+))", [this](const httplib::Request& request,
-                                                    httplib::Response& response) {
-    int source_id = 0;
-    if (!path_int(request, &source_id)) {
-      reply_error(response, 400, "invalid source id");
-      return;
-    }
-    std::string error;
-    const json body = parse_body(request, &error);
-    if (body.is_null()) {
-      reply_error(response, 400, error);
-      return;
-    }
-    if (!daemon_->put_source(source_id, body, &error)) {
-      reply_error(response, 502, error);
-      return;
-    }
-    reply_json(response, json{{"ok", true}});
-  });
+  svr->Put(R"(/api/aes67/sources/([0-9]+))",
+           [this](const httplib::Request& request, httplib::Response& response) {
+             int source_id = 0;
+             if (!path_int(request, &source_id)) {
+               reply_error(response, 400, "invalid source id");
+               return;
+             }
+             std::string error;
+             const json body = parse_body(request, &error);
+             if (body.is_null()) {
+               reply_error(response, 400, error);
+               return;
+             }
+             if (!daemon_->put_source(source_id, body, &error)) {
+               reply_error(response, 502, error);
+               return;
+             }
+             reply_json(response, json{{"ok", true}});
+           });
 
   svr->Delete(R"(/api/aes67/sources/([0-9]+))",
               [this](const httplib::Request& request, httplib::Response& response) {
@@ -528,24 +533,21 @@ void ApiServer::register_routes() {
 
   // A handler that throws (bad JSON, unexpected state) must return a useful
   // error instead of silently dropping the connection.
-  svr->set_exception_handler(
-      [](const httplib::Request& request, httplib::Response& response,
-         std::exception_ptr error) {
-        std::string message = "internal error";
-        try {
-          std::rethrow_exception(error);
-        } catch (const std::exception& ex) {
-          message = std::string("internal error: ") + ex.what();
-        } catch (...) {
-          message = "internal error: unknown exception";
-        }
-        LOG_ERROR("request ", request.method, " ", request.path, " failed: ",
-                  message);
-        reply_error(response, 500, message);
-      });
+  svr->set_exception_handler([](const httplib::Request& request,
+                                httplib::Response& response,
+                                std::exception_ptr error) {
+    std::string message = "internal error";
+    try {
+      std::rethrow_exception(error);
+    } catch (const std::exception& ex) {
+      message = std::string("internal error: ") + ex.what();
+    } catch (...) {
+      message = "internal error: unknown exception";
+    }
+    LOG_ERROR("request ", request.method, " ", request.path, " failed: ", message);
+    reply_error(response, 500, message);
+  });
 }
-
-
 
 // ---------------------------------------------------------------------------
 // lifecycle
@@ -562,8 +564,7 @@ bool ApiServer::start(std::string* error) {
       config_->http_addr.empty() ? "0.0.0.0" : config_->http_addr;
   if (!server_->bind_to_port(address, config_->http_port)) {
     if (error) {
-      *error = "cannot bind " + address + ":" +
-               std::to_string(config_->http_port) +
+      *error = "cannot bind " + address + ":" + std::to_string(config_->http_port) +
                " (is another instance already running?)";
     }
     server_.reset();
@@ -597,5 +598,3 @@ void ApiServer::stop() {
 }
 
 }  // namespace aes67sip
-
-

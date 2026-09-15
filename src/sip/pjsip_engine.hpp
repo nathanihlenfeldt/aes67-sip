@@ -2,11 +2,11 @@
 
 #include <pjsua2.hpp>
 
-#include <future>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -61,7 +61,8 @@ class PjsipSipEngine : public SipEngine {
   bool answer(int line_id, std::string* error) override;
   bool hangup(int line_id, std::string* error) override;
   bool set_hold(int line_id, bool hold, std::string* error) override;
-  bool send_dtmf(int line_id, const std::string& digits, std::string* error) override;
+  bool send_dtmf(int line_id, const std::string& digits,
+                 std::string* error) override;
 
   CallStatus call_status(int line_id) const override;
 

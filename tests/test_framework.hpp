@@ -103,50 +103,50 @@ inline int run_all() {
 
 }  // namespace test
 
-#define TEST_CASE(name)                                                     \
-  static void name();                                                       \
-  static test::Registrar registrar_##name(#name, name);                     \
+#define TEST_CASE(name)                                 \
+  static void name();                                   \
+  static test::Registrar registrar_##name(#name, name); \
   static void name()
 
-#define CHECK(expression)                                                   \
-  do {                                                                      \
-    if (!(expression)) {                                                    \
-      test::report_failure(#expression, __FILE__, __LINE__);                \
-    }                                                                       \
+#define CHECK(expression)                                    \
+  do {                                                       \
+    if (!(expression)) {                                     \
+      test::report_failure(#expression, __FILE__, __LINE__); \
+    }                                                        \
   } while (0)
 
-#define CHECK_EQ(actual, expected)                                          \
-  do {                                                                      \
-    const auto& a_ = (actual);                                              \
-    const auto& e_ = (expected);                                            \
-    if (!(a_ == e_)) {                                                      \
-      test::report_failure(#actual, __FILE__, __LINE__,                     \
-                           "expected " + test::describe(e_) +               \
-                               ", got " + test::describe(a_));              \
-    }                                                                       \
+#define CHECK_EQ(actual, expected)                                           \
+  do {                                                                       \
+    const auto& a_ = (actual);                                               \
+    const auto& e_ = (expected);                                             \
+    if (!(a_ == e_)) {                                                       \
+      test::report_failure(                                                  \
+          #actual, __FILE__, __LINE__,                                       \
+          "expected " + test::describe(e_) + ", got " + test::describe(a_)); \
+    }                                                                        \
   } while (0)
 
-#define CHECK_NEAR(actual, expected, tolerance)                             \
-  do {                                                                      \
-    const double a_ = static_cast<double>(actual);                          \
-    const double e_ = static_cast<double>(expected);                        \
-    if (!test::nearly_equal(a_, e_, tolerance)) {                           \
-      std::ostringstream os_;                                              \
-      os_ << "expected " << e_ << " +/- " << tolerance << ", got " << a_;   \
-      test::report_failure(#actual, __FILE__, __LINE__, os_.str());         \
-    }                                                                       \
+#define CHECK_NEAR(actual, expected, tolerance)                           \
+  do {                                                                    \
+    const double a_ = static_cast<double>(actual);                        \
+    const double e_ = static_cast<double>(expected);                      \
+    if (!test::nearly_equal(a_, e_, tolerance)) {                         \
+      std::ostringstream os_;                                             \
+      os_ << "expected " << e_ << " +/- " << tolerance << ", got " << a_; \
+      test::report_failure(#actual, __FILE__, __LINE__, os_.str());       \
+    }                                                                     \
   } while (0)
 
-#define CHECK_THROWS(expression)                                            \
-  do {                                                                      \
-    bool threw_ = false;                                                    \
-    try {                                                                   \
-      (void)(expression);                                                   \
-    } catch (...) {                                                         \
-      threw_ = true;                                                        \
-    }                                                                       \
-    if (!threw_) {                                                          \
-      test::report_failure("expected an exception from " #expression,       \
-                           __FILE__, __LINE__);                             \
-    }                                                                       \
+#define CHECK_THROWS(expression)                                                \
+  do {                                                                          \
+    bool threw_ = false;                                                        \
+    try {                                                                       \
+      (void)(expression);                                                       \
+    } catch (...) {                                                             \
+      threw_ = true;                                                            \
+    }                                                                           \
+    if (!threw_) {                                                              \
+      test::report_failure("expected an exception from " #expression, __FILE__, \
+                           __LINE__);                                           \
+    }                                                                           \
   } while (0)

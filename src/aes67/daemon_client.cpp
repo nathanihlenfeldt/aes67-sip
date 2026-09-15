@@ -223,13 +223,12 @@ class HttpDaemonClient : public DaemonClient {
 class FakeDaemonClient : public DaemonClient {
  public:
   explicit FakeDaemonClient(const Aes67DaemonConfig& config) : config_(config) {
-    LOG_WARN("using the simulated AES67 daemon (fake); no audio reaches the network");
-    config_json_ = json{{"interface_name", "lo"},
-                        {"http_port", config_.port},
-                        {"sample_rate", 48000},
-                        {"rtp_mcast_base", config_.rtp_mcast_base},
-                        {"rtp_port", 5004},
-                        {"tic_frame_size_at_1fs", 48}};
+    LOG_WARN(
+        "using the simulated AES67 daemon (fake); no audio reaches the network");
+    config_json_ =
+        json{{"interface_name", "lo"}, {"http_port", config_.port},
+             {"sample_rate", 48000},   {"rtp_mcast_base", config_.rtp_mcast_base},
+             {"rtp_port", 5004},       {"tic_frame_size_at_1fs", 48}};
   }
 
   bool connected() const override { return true; }
@@ -348,15 +347,14 @@ class FakeDaemonClient : public DaemonClient {
     if (sources != nullptr) {
       json list = json::array();
       for (int id = 0; id < 3; ++id) {
-        list.push_back(
-            json{{"source", kind == "mdns" ? "mDNS" : "SAP"},
-                 {"id", "fake" + std::to_string(id)},
-                 {"name", "Intercom endpoint " + std::to_string(id + 1)},
-                 {"domain", ""},
-                 {"address", "10.0.0." + std::to_string(21 + id)},
-                 {"sdp", intercom_sdp(id + 1, 0x40000000u + 1u + id)},
-                 {"last_seen", 3 * id},
-                 {"announce_period", 30}});
+        list.push_back(json{{"source", kind == "mdns" ? "mDNS" : "SAP"},
+                            {"id", "fake" + std::to_string(id)},
+                            {"name", "Intercom endpoint " + std::to_string(id + 1)},
+                            {"domain", ""},
+                            {"address", "10.0.0." + std::to_string(21 + id)},
+                            {"sdp", intercom_sdp(id + 1, 0x40000000u + 1u + id)},
+                            {"last_seen", 3 * id},
+                            {"announce_period", 30}});
       }
       *sources = json{{"remote_sources", list}};
     }
@@ -436,10 +434,9 @@ bool DaemonClient::make_sink(const Aes67DaemonConfig& daemon_config,
   }
   if (trim(remote_sdp).empty()) {
     if (error != nullptr) {
-      *error =
-          "line " + std::to_string(line.id) + " (" + line.name +
-          ") has no endpoint SDP: pick a discovered SAP/mDNS source or paste "
-          "the endpoint SDP (aes67.remote_source_id / aes67.remote_sdp)";
+      *error = "line " + std::to_string(line.id) + " (" + line.name +
+               ") has no endpoint SDP: pick a discovered SAP/mDNS source or paste "
+               "the endpoint SDP (aes67.remote_source_id / aes67.remote_sdp)";
     }
     return false;
   }
@@ -458,6 +455,3 @@ bool DaemonClient::make_sink(const Aes67DaemonConfig& daemon_config,
 }
 
 }  // namespace aes67sip
-
-
-

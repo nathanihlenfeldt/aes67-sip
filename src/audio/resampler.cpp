@@ -45,8 +45,8 @@ Resampler::Resampler(unsigned in_rate, unsigned out_rate, unsigned channels,
       channels_(channels == 0 ? 1 : channels),
       taps_(std::max(4U, taps_per_phase)) {
   const unsigned divisor = gcd(in_rate_, out_rate_);
-  up_ = out_rate_ / divisor;    // L
-  down_ = in_rate_ / divisor;   // M
+  up_ = out_rate_ / divisor;   // L
+  down_ = in_rate_ / divisor;  // M
   integer_ratio_ = up_ <= 32 && down_ <= 32 && up_ * down_ <= 64;
 
   if (in_rate_ == out_rate_) {
@@ -74,9 +74,9 @@ void Resampler::design_filter() {
   std::vector<double> prototype(length, 0.0);
   double sum = 0.0;
   for (unsigned n = 0; n < length; ++n) {
-    const double value =
-        2.0 * fc * sinc(2.0 * fc * (static_cast<double>(n) - center)) *
-        blackman(n, length);
+    const double value = 2.0 * fc *
+                         sinc(2.0 * fc * (static_cast<double>(n) - center)) *
+                         blackman(n, length);
     prototype[n] = value;
     sum += value;
   }
@@ -183,12 +183,14 @@ size_t Resampler::process_polyphase(const float* input, size_t in_frames,
 
   // keep the newest taps_ input frames as filter history
   if (total_frames >= taps_) {
-    std::copy(buffer.begin() + static_cast<long>((total_frames - taps_) * channels_),
-              buffer.end(), history_.begin());
+    std::copy(
+        buffer.begin() + static_cast<long>((total_frames - taps_) * channels_),
+        buffer.end(), history_.begin());
   } else {
     std::fill(history_.begin(), history_.end(), 0.0F);
-    std::copy(buffer.begin(), buffer.end(),
-              history_.begin() + static_cast<long>((taps_ - total_frames) * channels_));
+    std::copy(
+        buffer.begin(), buffer.end(),
+        history_.begin() + static_cast<long>((taps_ - total_frames) * channels_));
   }
   return produced;
 }
@@ -206,10 +208,9 @@ size_t Resampler::process_linear(const float* input, size_t in_frames,
       const float next = (index + 1 < in_frames)
                              ? input[(index + 1) * channels_ + channel]
                              : current;
-      output[produced * channels_ + channel] =
-          static_cast<float>(static_cast<double>(current) +
-                             (static_cast<double>(next) - static_cast<double>(current)) *
-                                 fraction);
+      output[produced * channels_ + channel] = static_cast<float>(
+          static_cast<double>(current) +
+          (static_cast<double>(next) - static_cast<double>(current)) * fraction);
     }
     ++produced;
     position_ += ratio;
@@ -222,4 +223,3 @@ size_t Resampler::process_linear(const float* input, size_t in_frames,
 }
 
 }  // namespace aes67sip
-

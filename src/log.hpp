@@ -50,12 +50,12 @@ std::string log_format(Args&&... args) {
 
 }  // namespace aes67sip
 
-#define AES67SIP_LOG(severity, ...)                                        \
-  do {                                                                     \
-    if (::aes67sip::Log::instance().enabled(severity)) {                   \
-      ::aes67sip::Log::instance().write(severity,                          \
+#define AES67SIP_LOG(severity, ...)                                           \
+  do {                                                                        \
+    if (::aes67sip::Log::instance().enabled(severity)) {                      \
+      ::aes67sip::Log::instance().write(severity,                             \
                                         ::aes67sip::log_format(__VA_ARGS__)); \
-    }                                                                      \
+    }                                                                         \
   } while (0)
 
 #define LOG_ERROR(...) AES67SIP_LOG(::aes67sip::LogSeverity::kError, __VA_ARGS__)

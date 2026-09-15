@@ -100,7 +100,7 @@ bool App::initialise(std::string* error) {
 
   // ---- lines (need a SIP engine, which needs the line manager) -----------
   lines_ = std::make_unique<LineManager>(&config_, config_path_, daemon_.get(),
-                                        router_.get(), nullptr);
+                                         router_.get(), nullptr);
   if (!config_.lines.empty() && config_.audio.channels < config_.lines.size()) {
     LOG_WARN("only ", config_.audio.channels, " RAVENNA channels for ",
              config_.lines.size(),
@@ -110,7 +110,8 @@ bool App::initialise(std::string* error) {
   // ---- SIP ---------------------------------------------------------------
   if (config_.sip.enabled) {
     std::string sip_error;
-    engine_ = SipEngine::create(config_.sip, lines_.get(), lines_.get(), &sip_error);
+    engine_ =
+        SipEngine::create(config_.sip, lines_.get(), lines_.get(), &sip_error);
     if (engine_ == nullptr) {
       if (error != nullptr) {
         *error = "cannot create the SIP engine: " + sip_error;
@@ -119,8 +120,9 @@ bool App::initialise(std::string* error) {
     }
     LOG_INFO("SIP engine: ", engine_->engine_name(), ", ", config_.sip.transport,
              " port ", config_.sip.local_port, ", ",
-             config_.sip.codecs.empty() ? "default codecs"
-                                        : config_.sip.codecs.front() + " preferred");
+             config_.sip.codecs.empty()
+                 ? "default codecs"
+                 : config_.sip.codecs.front() + " preferred");
   } else {
     LOG_WARN("SIP is disabled in the configuration");
   }
@@ -151,8 +153,9 @@ bool App::restart(std::string* error) {
     config_ = reloaded;
     apply_log_severity(nullptr);
     if (audio_signature(config_) != previous_signature) {
-      LOG_WARN("audio device settings changed: restart the service "
-               "(systemctl restart aes67-sip) to apply them");
+      LOG_WARN(
+          "audio device settings changed: restart the service "
+          "(systemctl restart aes67-sip) to apply them");
     }
   } else {
     LOG_WARN("cannot reload ", config_path_, ": ", load_error,
@@ -254,4 +257,3 @@ void App::shutdown() {
 }
 
 }  // namespace aes67sip
-

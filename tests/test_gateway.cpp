@@ -116,7 +116,8 @@ struct Gateway {
   }
 };
 
-json get_json(httplib::Client& client, const std::string& path, int* status = nullptr) {
+json get_json(httplib::Client& client, const std::string& path,
+              int* status = nullptr) {
   const auto response = client.Get(path);
   if (status != nullptr) {
     *status = response ? response->status : 0;
@@ -202,7 +203,8 @@ TEST_CASE(rest_api_serves_status_and_controls_lines) {
 
   const json status = get_json(client, "/api/status");
   CHECK(!status.is_null());
-  CHECK_EQ(status.at("audio").at("backend").get<std::string>(), std::string("null"));
+  CHECK_EQ(status.at("audio").at("backend").get<std::string>(),
+           std::string("null"));
   CHECK_EQ(status.at("audio").at("channels").get<int>(), 4);
   CHECK(status.at("audio").at("state") == "running");
   CHECK(status.at("aes67").at("ptp").at("status") == "locked");
@@ -222,8 +224,8 @@ TEST_CASE(rest_api_serves_status_and_controls_lines) {
            std::string("1001"));
 
   // start a call through the API and check it reaches in_call
-  const auto dial = client.Post("/api/lines/0/call",
-                                json{{"action", "dial"}}.dump(), "application/json");
+  const auto dial = client.Post(
+      "/api/lines/0/call", json{{"action", "dial"}}.dump(), "application/json");
   CHECK(dial && dial->status == 200);
   CHECK(gateway.wait_for([](const json& document) {
     return document.at("lines")[0].at("state") == "in_call";
@@ -234,11 +236,12 @@ TEST_CASE(rest_api_serves_status_and_controls_lines) {
   CHECK(levels.contains("sip_tx_dbfs"));
 
   // mute + gain update goes through the config endpoint
-  const auto updated = client.Post(
-      "/api/lines/0/config",
-      json{{"mute", true}, {"gain_db", -6.0}, {"sip", {{"call_mode", "auto_answer"}}}}
-          .dump(),
-      "application/json");
+  const auto updated = client.Post("/api/lines/0/config",
+                                   json{{"mute", true},
+                                        {"gain_db", -6.0},
+                                        {"sip", {{"call_mode", "auto_answer"}}}}
+                                       .dump(),
+                                   "application/json");
   CHECK(updated && updated->status == 200);
   const json line = json::parse(updated->body);
   CHECK(line.at("mute").get<bool>());
@@ -251,14 +254,12 @@ TEST_CASE(rest_api_serves_status_and_controls_lines) {
   CHECK(reloaded.lines[0].mute);
   CHECK_EQ(reloaded.lines[0].sip.call_mode, std::string("auto_answer"));
 
-  const auto hangup = client.Post("/api/lines/0/call",
-                                  json{{"action", "hangup"}}.dump(),
-                                  "application/json");
+  const auto hangup = client.Post(
+      "/api/lines/0/call", json{{"action", "hangup"}}.dump(), "application/json");
   CHECK(hangup && hangup->status == 200);
 
-  const auto bogus = client.Post("/api/lines/0/call",
-                                 json{{"action", "sing"}}.dump(),
-                                 "application/json");
+  const auto bogus = client.Post(
+      "/api/lines/0/call", json{{"action", "sing"}}.dump(), "application/json");
   CHECK(bogus && bogus->status == 400);
 
   int missing_status = 0;
@@ -279,7 +280,8 @@ TEST_CASE(rest_api_self_test_reports_checks) {
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
-  const auto response = client.Post("/api/system/self-test", "", "application/json");
+  const auto response =
+      client.Post("/api/system/self-test", "", "application/json");
   CHECK(response && response->status == 200);
   const json result = json::parse(response->body);
   CHECK(result.contains("ok"));
@@ -299,4 +301,3 @@ TEST_CASE(rest_api_self_test_reports_checks) {
 
   gateway.stop();
 }
-
