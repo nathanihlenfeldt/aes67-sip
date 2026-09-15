@@ -90,7 +90,8 @@ class DaemonClient {
   static json make_source(const Aes67DaemonConfig& daemon_config,
                           const LineConfig& line);
   static bool make_sink(const Aes67DaemonConfig& daemon_config,
-                        const LineConfig& line, json* sink, std::string* error);
+                        const LineConfig& line, const std::string& remote_sdp,
+                        json* sink, std::string* error);
 };
 
 }  // namespace aes67sip

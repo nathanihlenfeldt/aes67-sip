@@ -1,0 +1,89 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PJSIP_VERSION: "2.17"
+  PJSIP_PREFIX: ${{ github.workspace }}/third_party/pjsip-install
+
+jobs:
+  package:
+    name: package (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo ./scripts/install-deps.sh
+
+      - name: Cache PJSIP
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PJSIP_PREFIX }}
+          key: pjsip-${{ env.PJSIP_VERSION }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-pjsip.sh') }}
+
+      - name: Build PJSIP (pjsua2)
+        run: ./scripts/build-pjsip.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Build web UI
+        working-directory: webui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build gateway
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_PJSIP=ON -DWITH_ALSA=ON -DWITH_TESTS=ON \
+            -DPJSIP_ROOT="${PJSIP_PREFIX}"
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+      - name: Install into a staging tree
+        run: |
+          DESTDIR="${GITHUB_WORKSPACE}/staging" cmake --install build --prefix /usr/local
+          find staging -type f | sort
+
+      - name: Build release tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          ARCH="$(uname -m)"
+          NAME="aes67-sip-${VERSION}-linux-${ARCH}"
+          mkdir -p "dist/${NAME}"
+          cp -r staging/* "dist/${NAME}/"
+          cp scripts/setup-ravenna.sh scripts/install-deps.sh "dist/${NAME}/usr/local/share/aes67-sip/" 2>/dev/null || true
+          cp README.md LICENSE "dist/${NAME}/" 2>/dev/null || true
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          (cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.runner }}
+          path: dist/*.tar.gz*
+
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz*
+          generate_release_notes: true

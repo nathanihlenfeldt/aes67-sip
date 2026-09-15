@@ -101,6 +101,7 @@ void Resampler::design_filter() {
 
   history_.assign(static_cast<size_t>(taps_) * channels_, 0.0F);
   base_ = 0;
+  input_frames_ = 0;
 }
 
 size_t Resampler::max_output_frames(size_t in_frames) const {
@@ -111,6 +112,7 @@ size_t Resampler::max_output_frames(size_t in_frames) const {
 void Resampler::reset() {
   std::fill(history_.begin(), history_.end(), 0.0F);
   base_ = 0;
+  input_frames_ = 0;
   position_ = 0.0;
   std::fill(previous_.begin(), previous_.end(), 0.0F);
 }
@@ -142,7 +144,13 @@ size_t Resampler::process_polyphase(const float* input, size_t in_frames,
             buffer.begin() + static_cast<long>(history_frames * channels_));
 
   size_t produced = 0;
-  const int64_t last_available = static_cast<int64_t>(total_frames) - 1;
+  // Absolute index of the newest input frame available to this call.  Indices
+  // are global (they never restart at each call) so the polyphase phase and the
+  // filter history stay consistent across blocks.
+  const int64_t last_available =
+      input_frames_ + static_cast<int64_t>(in_frames) - 1;
+  const int64_t buffer_offset =
+      static_cast<int64_t>(history_frames) - input_frames_;
 
   while (true) {
     const int64_t k0 = base_ / static_cast<int64_t>(up_);
@@ -156,17 +164,22 @@ size_t Resampler::process_polyphase(const float* input, size_t in_frames,
       double accumulator = 0.0;
       for (unsigned i = 0; i < taps_; ++i) {
         const int64_t source_frame = k0 - static_cast<int64_t>(i);
-        if (source_frame < 0) {
-          continue;  // startup transient: missing history counts as silence
+        const int64_t buffer_index = source_frame + buffer_offset;
+        if (buffer_index < 0 ||
+            buffer_index >= static_cast<int64_t>(total_frames)) {
+          continue;  // not yet available: treat missing history as silence
         }
-        const size_t index = static_cast<size_t>(source_frame) * channels_ + channel;
-        accumulator += static_cast<double>(buffer[index]) * coefficients[i];
+        accumulator +=
+            static_cast<double>(
+                buffer[static_cast<size_t>(buffer_index) * channels_ + channel]) *
+            coefficients[i];
       }
       output[produced * channels_ + channel] = static_cast<float>(accumulator);
     }
     ++produced;
     base_ += static_cast<int64_t>(down_);
   }
+  input_frames_ += static_cast<int64_t>(in_frames);
 
   // keep the newest taps_ input frames as filter history
   if (total_frames >= taps_) {

@@ -90,7 +90,19 @@ Single poll endpoint used by the UI.
 ```
 
 `state` is one of `disabled`, `idle`, `dialing`, `ringing`, `in_call`, `error`.
-Levels are dBFS floats; `-inf` is serialised as `null`.
+Levels are dBFS floats; silence is serialised as `null`.
+
+Level directions: `rx_dbfs` / `tx_dbfs` are measured at the **AES67 (on site)
+side** of the gateway - `rx_dbfs` is what the intercom endpoint sends us,
+`tx_dbfs` is what we send back to it. `sip_rx_dbfs` is audio received from the
+PBX and `sip_tx_dbfs` is audio sent to the PBX, so `sip_tx_dbfs` (before gain)
+tracks `rx_dbfs`. `audio.levels_dbfs[]` are the per RAVENNA channel capture
+levels and `audio.playback_dbfs[]` the per channel playback levels; both are
+used by the diagnostics page.
+
+`aes67.receiving` comes from the daemon's sink status (`receiving_rtp_packet`)
+and is refreshed every 2 s, `aes67.error` aggregates the RTP error flags
+(sequence/SSRC/payload type/timestamp).
 
 ## 5. Lines
 
@@ -99,9 +111,9 @@ Levels are dBFS floats; `-inf` is serialised as `null`.
 | `GET` | `/api/lines` | array of line status objects (same shape as `status.lines`) |
 | `GET` | `/api/lines/{id}` | one line status object |
 | `GET` | `/api/lines/{id}/config` | line configuration object |
-| `POST` | `/api/lines/{id}/config` | partial line configuration update (persisted) |
+| `POST` | `/api/lines/{id}/config` | partial line configuration update (persisted); returns the updated line **status** object |
 | `POST` | `/api/lines/{id}/call` | call control, see below |
-| `GET` | `/api/lines/{id}/levels` | `{ "rx_dbfs": -18.2, "tx_dbfs": -60.0 }` |
+| `GET` | `/api/lines/{id}/levels` | `{ "rx_dbfs": -18.2, "tx_dbfs": -60.0, "sip_rx_dbfs": -60.0, "sip_tx_dbfs": -18.2 }` |
 
 `POST /api/lines/{id}/config` accepts:
 

@@ -152,6 +152,9 @@ struct Config {
 
   /** Index in `lines` of the line with `id`, or -1. */
   int line_index(int id) const;
+
+  /** Parses a single line document (used by partial line updates). */
+  static LineConfig parse_line(const json& document);
 };
 
 }  // namespace aes67sip

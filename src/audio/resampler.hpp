@@ -59,6 +59,7 @@ class Resampler {
   std::vector<double> filter_;
   std::vector<float> history_;  // interleaved filter delay line (taps_ frames)
   int64_t base_{0};             // output position * down_, in input frame units
+  int64_t input_frames_{0};     // frames fed so far (absolute input indexing)
 
   // linear interpolation state
   double position_{0.0};

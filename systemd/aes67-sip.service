@@ -1,0 +1,53 @@
+[Unit]
+Description=AES67 <-> SIP intercom gateway
+Documentation=https://github.com/nathanihlenfeldt/aes67-sip
+After=network-online.target
+Wants=network-online.target
+# The AES67 streams and the PTP slave are provided by the daemon, so it should
+# be up first (it is not fatal when it is not: the gateway keeps retrying).
+After=aes67-daemon.service
+Wants=aes67-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aes67-sip -c /etc/aes67-sip.conf
+Restart=always
+RestartSec=2
+
+# The audio thread needs real time scheduling; the REST API binds a high port.
+User=aes67-sip
+Group=aes67-sip
+SupplementaryGroups=audio
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
+
+# Access to the RAVENNA ALSA device owned by the Merging kernel module.
+DeviceAllow=char-alsa rw
+DeviceAllow=/dev/snd/ rw
+PrivateDevices=no
+
+# Hardening (kept in line with the aes67-daemon unit).
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+NoNewPrivileges=yes
+PrivateMounts=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/aes67-sip /var/log/aes67-sip
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=no
+SystemCallArchitectures=native
+
+StateDirectory=aes67-sip
+LogsDirectory=aes67-sip
+
+[Install]
+WantedBy=multi-user.target

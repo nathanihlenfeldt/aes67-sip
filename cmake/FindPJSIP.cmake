@@ -37,6 +37,36 @@ find_library(PJSUA_LIBRARY NAMES pjsua HINTS ${_pjsip_hints} PATH_SUFFIXES lib l
 find_library(PJMEDIA_LIBRARY NAMES pjmedia HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
 find_library(PJ_LIBRARY NAMES pj HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
 
+# Some builds (Homebrew, cross builds) install the static archives with a
+# version/target suffix, e.g. libpjsua2-aarch64-apple-darwin24.0.0.a, which the
+# plain `NAMES pjsua2` lookup above cannot match.  Fall back to a glob.
+set(_pjsip_lib_dirs ${_pjsip_hints} ${PJSIP_INCLUDE_DIR})
+foreach(_pair "PJSUA2_LIBRARY;pjsua2" "PJSUA_LIBRARY;pjsua"
+              "PJMEDIA_LIBRARY;pjmedia" "PJ_LIBRARY;pj")
+  list(GET _pair 0 _var)
+  list(GET _pair 1 _base)
+  if(NOT ${_var})
+    foreach(_dir ${_pjsip_lib_dirs})
+      file(GLOB _candidates
+        "${_dir}/lib${_base}.*"
+        "${_dir}/lib${_base}-*"
+        "${_dir}/lib${_base}.so*"
+        "${_dir}/lib${_base}.dylib"
+        "${_dir}/lib${_base}.a")
+      if(_candidates)
+        list(SORT _candidates)
+        list(GET _candidates 0 _first)
+        set(${_var} "${_first}")
+        break()
+      endif()
+    endforeach()
+  endif()
+endforeach()
+unset(_pjsip_lib_dirs)
+unset(_candidates)
+unset(_first)
+unset(_pair)
+
 find_package_handle_standard_args(PJSIP
   REQUIRED_VARS
     PJSIP_INCLUDE_DIR

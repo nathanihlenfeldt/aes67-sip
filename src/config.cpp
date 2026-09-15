@@ -173,6 +173,10 @@ PcmFormat AudioConfig::pcm_format() const {
 // Config <- JSON
 // ---------------------------------------------------------------------------
 
+LineConfig Config::parse_line(const json& document) {
+  return line_from_json(document);
+}
+
 Config Config::from_json(const json& document) {
   Config config;
   config.log_severity = json_get<int>(document, "log_severity", config.log_severity);
