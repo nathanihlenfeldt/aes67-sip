@@ -152,6 +152,13 @@ if(PJSIP_AVAILABLE)
   target_link_libraries(aes67-sip-core PRIVATE ${PJSIP_LIBRARIES})
   target_include_directories(aes67-sip-core PRIVATE ${PJSIP_INCLUDE_DIRS})
   target_compile_definitions(aes67-sip-core PUBLIC WITH_PJSIP=1)
+  if(APPLE)
+    # pjproject 2.17's pj/compat/m_auto.h does not detect the endianness of
+    # clang on Apple Silicon, so pj/config.h aborts with "Endianness must be
+    # declared for this processor".  All supported Apple CPUs are little endian.
+    target_compile_definitions(aes67-sip-core PRIVATE
+      PJ_IS_LITTLE_ENDIAN=1 PJ_IS_BIG_ENDIAN=0)
+  endif()
 endif()
 
 if(ALSA_AVAILABLE)

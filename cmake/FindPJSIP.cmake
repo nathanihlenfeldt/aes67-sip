@@ -35,6 +35,8 @@ find_path(PJSIP_INCLUDE_DIR
 find_library(PJSUA2_LIBRARY NAMES pjsua2 HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
 find_library(PJSUA_LIBRARY NAMES pjsua HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
 find_library(PJMEDIA_LIBRARY NAMES pjmedia HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
+find_library(PJSIP_LIBRARY NAMES pjsip HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
+find_library(PJNATH_LIBRARY NAMES pjnath HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
 find_library(PJ_LIBRARY NAMES pj HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
 
 # Some builds (Homebrew, cross builds) install the static archives with a
@@ -42,7 +44,8 @@ find_library(PJ_LIBRARY NAMES pj HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
 # plain `NAMES pjsua2` lookup above cannot match.  Fall back to a glob.
 set(_pjsip_lib_dirs ${_pjsip_hints} ${PJSIP_INCLUDE_DIR})
 foreach(_pair "PJSUA2_LIBRARY;pjsua2" "PJSUA_LIBRARY;pjsua"
-              "PJMEDIA_LIBRARY;pjmedia" "PJ_LIBRARY;pj")
+              "PJMEDIA_LIBRARY;pjmedia" "PJSIP_LIBRARY;pjsip"
+              "PJNATH_LIBRARY;pjnath" "PJ_LIBRARY;pj")
   list(GET _pair 0 _var)
   list(GET _pair 1 _base)
   if(NOT ${_var})
@@ -73,22 +76,55 @@ find_package_handle_standard_args(PJSIP
     PJSUA2_LIBRARY
     PJSUA_LIBRARY
     PJMEDIA_LIBRARY
+    PJSIP_LIBRARY
     PJ_LIBRARY
   VERSION_VAR PJSIP_VERSION)
 
 if(PJSIP_FOUND)
-  # pjproject installs its public headers both directly and under a pj/ prefix
-  # directory, so both include paths are required.
+  # NOTE: only the include *root* may be on the search path.  pjproject also ships
+  # pj/string.h, pj/limits.h and pj/errno.h; adding <root>/pj as an include
+  # directory makes the system <string.h>/<limits.h>/<errno.h> resolve to those
+  # files and breaks every translation unit with "Endianness must be declared".
   set(PJSIP_INCLUDE_DIRS ${PJSIP_INCLUDE_DIR})
-  if(EXISTS "${PJSIP_INCLUDE_DIR}/pj")
-    list(APPEND PJSIP_INCLUDE_DIRS "${PJSIP_INCLUDE_DIR}/pj")
+
+  # Prefer pkg-config when pjproject provides it (complete link line).
+  find_package(PkgConfig QUIET)
+  set(_pjsip_link_libs "")
+  if(PkgConfig_FOUND)
+    pkg_check_modules(PC_PJSIP QUIET libpjproject)
+    if(PC_PJSIP_FOUND)
+      set(_pjsip_link_libs ${PC_PJSIP_LIBRARIES})
+      set(PJSIP_INCLUDE_DIRS ${PC_PJSIP_INCLUDE_DIRS} ${PJSIP_INCLUDE_DIRS})
+    endif()
   endif()
 
-  set(PJSIP_LIBRARIES
-      ${PJSUA2_LIBRARY}
-      ${PJSUA_LIBRARY}
-      ${PJMEDIA_LIBRARY}
-      ${PJ_LIBRARY})
+  if(NOT _pjsip_link_libs)
+    # Classic pjproject link order: pjsua2 -> pjsua -> pjmedia -> pjsip -> pjnath -> pj
+    set(_pjsip_link_libs
+        ${PJSUA2_LIBRARY}
+        ${PJSUA_LIBRARY}
+        ${PJMEDIA_LIBRARY}
+        ${PJSIP_LIBRARY}
+        ${PJNATH_LIBRARY}
+        ${PJ_LIBRARY})
+    foreach(_extra pjmedia-codec gsmcodec speex ilbccodec g7221codec resample srtp
+                   yuv webrtc)
+      find_library(PJSIP_EXTRA_${_extra} NAMES ${_extra}
+                   HINTS ${_pjsip_hints} PATH_SUFFIXES lib lib64)
+      if(PJSIP_EXTRA_${_extra})
+        list(APPEND _pjsip_link_libs ${PJSIP_EXTRA_${_extra}})
+      endif()
+    endforeach()
+    # system libraries a static pjproject build needs
+    foreach(_sys m dl)
+      find_library(PJSIP_SYS_${_sys} NAMES ${_sys})
+      if(PJSIP_SYS_${_sys})
+        list(APPEND _pjsip_link_libs ${PJSIP_SYS_${_sys}})
+      endif()
+    endforeach()
+  endif()
+
+  set(PJSIP_LIBRARIES ${_pjsip_link_libs})
 
   if(NOT TARGET PJSIP::PJSUA2)
     add_library(PJSIP::PJSUA2 UNKNOWN IMPORTED)
@@ -99,4 +135,5 @@ if(PJSIP_FOUND)
   endif()
 endif()
 
-mark_as_advanced(PJSIP_INCLUDE_DIR PJSUA2_LIBRARY PJSUA_LIBRARY PJMEDIA_LIBRARY PJ_LIBRARY)
+mark_as_advanced(PJSIP_INCLUDE_DIR PJSUA2_LIBRARY PJSUA_LIBRARY PJMEDIA_LIBRARY
+                 PJSIP_LIBRARY PJNATH_LIBRARY PJ_LIBRARY)
