@@ -90,6 +90,13 @@ struct LineAes67Config {
   std::string remote_source_id;
   std::string remote_sdp;
   bool ignore_refclk_gmid{false};  // skip the SDP/PTP grandmaster check
+  /**
+   * Advertise `a=ts-refclk:ptp=IEEE1588-2008:traceable` in our source's SDP
+   * instead of the explicit grandmaster clock ID.  Strict AES67 receivers accept
+   * "traceable", but some Dante implementations want the explicit ID and reject
+   * the flow otherwise - set this to false in that case.
+   */
+  bool refclk_ptp_traceable{true};
 };
 
 /**

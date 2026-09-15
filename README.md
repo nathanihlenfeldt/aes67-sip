@@ -140,7 +140,8 @@ cd webui && npm install && npm run build            # production UI bundle
 With real SIP: `./scripts/build-pjsip.sh`, then configure with
 `-DWITH_PJSIP=ON -DPJSIP_ROOT=third_party/pjsip-install`.
 
-Tests: `ctest --test-dir build --output-on-failure`.
+Tests: `ctest --test-dir build --output-on-failure`, or run everything CI runs (formatting,
+build, tests, script syntax) with `./scripts/check.sh` before committing.
 
 ## Layout
 

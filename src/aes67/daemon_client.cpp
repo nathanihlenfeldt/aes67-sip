@@ -419,7 +419,7 @@ json DaemonClient::make_source(const Aes67DaemonConfig& daemon_config,
               {"ttl", daemon_config.source_ttl},
               {"payload_type", daemon_config.source_payload_type},
               {"dscp", daemon_config.source_dscp},
-              {"refclk_ptp_traceable", true},
+              {"refclk_ptp_traceable", line.aes67.refclk_ptp_traceable},
               {"map", line.aes67.channels}};
 }
 
