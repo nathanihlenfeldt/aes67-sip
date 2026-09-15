@@ -185,21 +185,33 @@ void LineManager::apply_line_to_router(const LineConfig& line) {
 }
 
 void LineManager::configure_daemon_streams(const LineConfig& line) {
-  if (!config_->aes67_daemon.auto_configure || !line.enabled ||
-      !line.aes67.auto_create_streams) {
+  if (!config_->aes67_daemon.auto_configure || !line.aes67.auto_create_streams) {
     return;
   }
   std::string error;
 
+  // The source is programmed even for a disabled line, with `enabled: false`:
+  // a stream created while the line was enabled lives on in the daemon (its
+  // state is restored from the status file), so skipping disabled lines here
+  // left stray AES67 sources transmitting silence for ever - a receiver such as
+  // Q-SYS keeps showing a stream it can never use.
   const json source = DaemonClient::make_source(config_->aes67_daemon, line);
   if (!source.is_null()) {
     if (daemon_->put_source(line.aes67.source_id, source, &error)) {
       LOG_INFO("line ", line.id, ": AES67 source ", line.aes67.source_id, " '",
-               line.aes67.stream_name, "' configured");
+               line.aes67.stream_name, "' configured",
+               line.enabled ? "" : " (disabled)");
     } else {
       LOG_WARN("line ", line.id, ": cannot configure AES67 source ",
                line.aes67.source_id, ": ", error);
     }
+  }
+
+  // A disabled line has no endpoint to describe, and the sink may have been
+  // wired up by hand elsewhere (Dante Controller, Q-SYS, the daemon UI), so
+  // leave it exactly as it is.
+  if (!line.enabled) {
+    return;
   }
 
   json sink;

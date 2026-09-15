@@ -432,13 +432,20 @@ if cfg.get("interface_name") in (None, "", "lo"):
 # The HTTP streamer captures the RAVENNA device, which would block the gateway's
 # own capture path, so it must stay disabled.
 cfg["streamer_enabled"] = False
+# The daemon's auto_sinks_update rewrites a sink's SDP whenever a discovered
+# SAP/mDNS source matches its name - including our *own* announcements, which
+# turns a sink into a loopback of our source and can retarget a sink the gateway
+# programmed from the endpoint's real SDP (see docs/DECISIONS.md #8).  The
+# gateway owns sink wiring, so the daemon must not touch it.
+cfg["auto_sinks_update"] = False
 cfg.setdefault("mdns_enabled", True)
 cfg.setdefault("sap_mcast_addr", "239.255.255.255")
 cfg.setdefault("sample_rate", 48000)
 cfg.setdefault("tic_frame_size_at_1fs", 48)
 json.dump(cfg, open(path, "w"), indent=2, sort_keys=True)
 open(path, "a").write("\n")
-print(f"interface_name={cfg['interface_name']} streamer_enabled=False")
+print(f"interface_name={cfg['interface_name']} streamer_enabled=False "
+      f"auto_sinks_update=False")
 PY
     fi
   fi

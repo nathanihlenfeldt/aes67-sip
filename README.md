@@ -120,9 +120,33 @@ intercom use case:
    - **Diagnostics** - log tail, self-test, per-channel meters
 4. Check ALSA directly if a line looks dead:
    `arecord -D plughw:RAVENNA -c 1 -f S16_LE -r 48000 -d 5 /tmp/probe.wav`
+   (stop `aes67-sip` first: the gateway holds the PCM). The substream state is the
+   thing to look at - `cat /proc/asound/RAVENNA/pcm0c/sub0/status` - it must read
+   `state: RUNNING` with a `hw_ptr` that moves. The RAVENNA driver only exchanges
+   audio while a substream is triggered, so a `PREPARED` stream (or a `hw_ptr` of
+   0) means the device is idle: no capture, no RTP out, nothing played to the
+   endpoints. The gateway starts both directions itself; `GET /api/status`
+   reports the states in `audio.detail`.
+   When the driver's engine stops underneath a running gateway (restarting
+   `aes67-daemon` does that: the substreams keep reporting RUNNING while not a
+   frame moves), the gateway notices that no frames arrive, reopens the PCM and
+   logs `no audio from 'plughw:RAVENNA' for N s: the RAVENNA engine looks
+   stopped ... reopening the device`. No operator action is needed.
 
 The built-in self-test (`POST /api/system/self-test`) checks the audio backend, the
 daemon, PTP, SIP registration and each line in one go.
+
+### Interop notes (Q-SYS, Dante)
+
+- Our sources advertise the **explicit PTP grandmaster clock ID** in
+  `a=ts-refclk` (`aes67.refclk_ptp_traceable: false`, the default). Receivers that
+  compare the announced reference with the PTP domain's grandmaster - Q-SYS shows
+  this as a *grandmaster mismatch* and refuses the flow - cannot use the RFC 7273
+  `traceable` keyword we used to send, so only set that option to `true` for
+  receivers that insist on it.
+- Receivers ignore a stream while the realm's PTP domain or grandmaster differs;
+  both sides must show the same GMID (`GET /api/status` -> `aes67.ptp.gmid` should
+  equal the `a=ts-refclk` value in the endpoint's SDP).
 
 ## Development
 
@@ -160,8 +184,12 @@ docs/         DECISIONS.md (agreed scope), api.md (REST contract)
 
 ## Limitations
 
-- Validated end to end only in **fake mode** so far: the RAVENNA/ALSA path and real SIP
-  signalling still need validation on the target appliance (see docs/DECISIONS.md).
+- The **AES67 path and a SIP call are validated on the target appliance**
+  (Raspberry Pi 5, kernel 6.18, Q-SYS Core as the PTP grandmaster): a Q-SYS source
+  received on one RAVENNA channel and returned as L24 48 kHz / 1 ms RTP, and a call
+  with the FreePBX conference came up (`CONFIRMED`) with SIP audio - both
+  directions with no xruns.  Note that `sip.accounts[].code` is only updated by a
+  registration event, so it can still show the previous 401 while calls succeed.
 - **Kernel 6.15 and newer** run the RAVENNA driver's 1 ms audio tick as a soft hrtimer,
   so RTP is emitted in bursts rather than evenly (upstream issue
   [bondagit/ravenna-alsa-lkm#39](https://github.com/bondagit/ravenna-alsa-lkm/issues/39),

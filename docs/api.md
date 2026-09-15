@@ -110,8 +110,10 @@ reason of the last failure (it is not cleared by a later empty update).
 `loopback` means `aes67.commissioning_loopback` is on and the sink is subscribed
 to our own source - a bench aid that receives no endpoint audio; `unmanaged` means
 no endpoint SDP is configured so the gateway leaves the sink alone (it may have
-been wired up in Dante Controller, Q-SYS or the daemon UI); `none` means there is
-no sink at all.
+been wired up in Dante Controller, Q-SYS or the daemon UI); `external` means the
+daemon reports a sink subscription that is not our own source, i.e. a real
+endpoint was wired to that channel (the gateway's own supervision of a line that
+has no SDP configured); `none` means there is no sink at all.
 
 Level directions: `rx_dbfs` / `tx_dbfs` are measured at the **AES67 (on site)
 side** of the gateway - `rx_dbfs` is what the intercom endpoint sends us,

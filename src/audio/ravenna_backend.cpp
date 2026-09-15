@@ -12,6 +12,12 @@ namespace {
 
 constexpr int kWaitTimeoutMs = 500;
 
+/** No captured frames for this long means the RAVENNA engine stopped ticking. */
+constexpr double kStallSeconds = 2.0;
+
+/** Do not reopen the device more often than this while it stays idle. */
+constexpr double kRecoverIntervalSeconds = 15.0;
+
 snd_pcm_format_t to_alsa_format(PcmFormat format) {
   switch (format) {
     case PcmFormat::kS16Le:
@@ -104,6 +110,8 @@ bool RavennaAudioBackend::open(const AudioFormat& format, std::string* error) {
   capture_raw_.assign(raw_bytes, 0);
   playback_raw_.assign(raw_bytes, 0);
   open_ = true;
+  last_frames_at_ = monotonic_seconds();
+  last_recover_at_ = 0.0;
 
   LOG_INFO("RAVENNA audio device '", config_.device, "' opened: ", format_.channels,
            " ch, ", format_.sample_rate, " Hz, ", format_.period_frames,
@@ -207,7 +215,65 @@ bool RavennaAudioBackend::open_stream(snd_pcm_stream_t direction,
     return false;
   }
 
-  LOG_DEBUG(what, " stream opened: period ", period, " frames, buffer ", buffer);
+  snd_pcm_uframes_t period_frames = period;
+  snd_pcm_uframes_t buffer_frames = buffer;
+  snd_pcm_get_params(*handle, &buffer_frames, &period_frames);
+  if (direction == SND_PCM_STREAM_PLAYBACK) {
+    playback_period_frames_ = period_frames;
+    playback_buffer_frames_ = buffer_frames;
+  }
+  if (!start_stream(*handle, error)) {
+    return false;
+  }
+
+  LOG_DEBUG(what, " stream opened and started: period ", period_frames,
+            " frames, buffer ", buffer_frames);
+  return true;
+}
+
+bool RavennaAudioBackend::start_stream(snd_pcm_t* handle, std::string* error) {
+  if (handle == nullptr) {
+    return false;
+  }
+  const bool playback = snd_pcm_stream(handle) == SND_PCM_STREAM_PLAYBACK;
+
+  // The RAVENNA driver only exchanges audio while a substream is *triggered*:
+  // its ALSA trigger callback (start_interrupts -> startIO) marks the direction
+  // as running, and the driver's 1 ms audio tick only copies frames between the
+  // ALSA rings and the RTP streams when that flag is set (and PTP is locked).
+  //
+  // A prepared-but-never-started substream therefore leaves hw_ptr at 0 for
+  // ever: no capture data reaches us, our sources transmit nothing, and the
+  // audio the daemon's sinks receive is never played out.  Waiting for data
+  // before reading (snd_pcm_wait()) cannot recover from that - the device
+  // would have to be started first - so start both directions here, and again
+  // after every recovery prepare below.
+  if (playback) {
+    // Prime the ring with silence so triggering it does not underrun on the
+    // very first tick (an empty playback ring underruns immediately and the
+    // driver stops the stream again).
+    const snd_pcm_uframes_t prime = playback_buffer_frames_;
+    if (prime > 0) {
+      std::vector<uint8_t> silence(
+          static_cast<size_t>(prime) * format_.channels * bytes_per_sample(), 0);
+      snd_pcm_sframes_t written = snd_pcm_writei(handle, silence.data(), prime);
+      if (written < 0) {
+        LOG_DEBUG("playback prime write: ", snd_strerror(written),
+                  " (continuing, the stream is started anyway)");
+      }
+    }
+  }
+
+  if (snd_pcm_state(handle) == SND_PCM_STATE_PREPARED) {
+    const int rc = snd_pcm_start(handle);
+    if (rc < 0) {
+      if (error != nullptr) {
+        *error = std::string("cannot start '") + config_.device + "' (" +
+                 (playback ? "playback" : "capture") + "): " + snd_strerror(rc);
+      }
+      return false;
+    }
+  }
   return true;
 }
 
@@ -312,6 +378,9 @@ bool RavennaAudioBackend::read(float* destination, unsigned frames,
     if (ready == 0) {
       LOG_DEBUG("capture timed out after ", kWaitTimeoutMs,
                 " ms (is the PTP clock locked?)");
+      // A device that never produces anything is not just idle: the RAVENNA
+      // engine has stopped (see recover_if_stalled).
+      recover_if_stalled();
       fill_silence(destination, frames);
       return false;
     }
@@ -329,6 +398,12 @@ bool RavennaAudioBackend::read(float* destination, unsigned frames,
         }
         fill_silence(destination, frames);
         return false;
+      }
+      // prepare() leaves the stream in PREPARED, which stops the driver's tick
+      // for this direction - trigger it again or the capture never resumes.
+      std::string restart_error;
+      if (!start_stream(capture_, &restart_error)) {
+        LOG_WARN("cannot restart capture after an overrun: ", restart_error);
       }
       if (error) {
         *error = "capture overrun (recovered)";
@@ -353,8 +428,37 @@ bool RavennaAudioBackend::read(float* destination, unsigned frames,
              output);
     output += static_cast<size_t>(got) * format_.channels;
     remaining -= static_cast<unsigned>(got);
+    last_frames_at_ = monotonic_seconds();
   }
   return true;
+}
+
+void RavennaAudioBackend::recover_if_stalled() {
+  if (!open_) {
+    return;
+  }
+  const double now = monotonic_seconds();
+  if (last_frames_at_ > 0.0 && now - last_frames_at_ < kStallSeconds) {
+    return;
+  }
+  if (last_recover_at_ > 0.0 && now - last_recover_at_ < kRecoverIntervalSeconds) {
+    return;
+  }
+  last_recover_at_ = now;
+
+  // Reopening the PCM re-triggers both substreams, which is what makes the
+  // driver's audio engine run again after the daemon restarted it underneath
+  // us (the streams keep reporting RUNNING while nothing moves).
+  LOG_WARN("no audio from '", config_.device, "' for ",
+           static_cast<int>(now - last_frames_at_),
+           " s: the RAVENNA engine looks stopped (a daemon restart does that) - "
+           "reopening the device");
+  const AudioFormat format = format_;
+  close();
+  std::string error;
+  if (!open(format, &error)) {
+    LOG_ERROR("cannot reopen '", config_.device, "': ", error);
+  }
 }
 
 bool RavennaAudioBackend::write(const float* source, unsigned frames,
@@ -386,13 +490,19 @@ bool RavennaAudioBackend::write(const float* source, unsigned frames,
         snd_pcm_writei(playback_, playback_raw_.data(), remaining);
     if (written == -EPIPE) {
       // Underrun: nothing to send yet.  Recover and drop this block rather than
-      // failing the whole write (see the matching comment in read()).
+      // failing the whole write (see the matching comment in read()).  The
+      // recovery prepare stops the driver's tick for the playback direction,
+      // so re-prime the ring with silence and trigger it again.
       underruns_++;
       if (snd_pcm_prepare(playback_) < 0) {
         if (error) {
           *error = "playback underrun and prepare failed";
         }
         return false;
+      }
+      std::string restart_error;
+      if (!start_stream(playback_, &restart_error)) {
+        LOG_WARN("cannot restart playback after an underrun: ", restart_error);
       }
       if (error) {
         *error = "playback underrun (recovered)";
@@ -418,8 +528,17 @@ bool RavennaAudioBackend::write(const float* source, unsigned frames,
 }
 
 std::string RavennaAudioBackend::detail() const {
-  return config_.device + " " + std::to_string(format_.channels) + "ch @" +
-         std::to_string(format_.sample_rate) + "Hz " + config_.format;
+  std::string out = config_.device + " " + std::to_string(format_.channels) +
+                    "ch @" + std::to_string(format_.sample_rate) + "Hz " +
+                    config_.format;
+  if (open_ && capture_ != nullptr && playback_ != nullptr) {
+    // Report the substream state: a PREPARED stream means the driver's audio
+    // engine never started, which is silent (no capture, no RTP out) without
+    // any error to see.
+    out += std::string(", capture ") + snd_pcm_state_name(snd_pcm_state(capture_)) +
+           ", playback " + snd_pcm_state_name(snd_pcm_state(playback_));
+  }
+  return out;
 }
 
 }  // namespace aes67sip

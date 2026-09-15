@@ -22,8 +22,10 @@ namespace aes67sip {
  *   capture  substream -> audio coming from the intercom endpoints
  *   playback substream -> audio going to the intercom endpoints
  *
- * The device only produces/consumes samples once the PTP slave is locked, so
- * `read()` returns silence (rather than failing) while it is not.
+ * The device only produces/consumes samples once the PTP slave is locked *and*
+ * the substream has been triggered (`snd_pcm_start()`): an untriggered stream
+ * stays silent for ever, which is why open() starts both directions.  `read()`
+ * returns silence (rather than failing) while PTP is not locked.
  */
 class RavennaAudioBackend : public AudioBackend {
  public:
@@ -50,6 +52,28 @@ class RavennaAudioBackend : public AudioBackend {
  private:
   bool open_stream(snd_pcm_stream_t direction, snd_pcm_t** handle,
                    std::string* error);
+  /**
+   * Trigger a substream so the driver's audio engine starts ticking.
+   *
+   * The RAVENNA kernel module only moves audio for a substream that has been
+   * started (its ALSA trigger callback marks the direction as running); a
+   * prepared but untriggered stream never produces or consumes a single frame.
+   * For playback the ring is primed with silence first, otherwise the first
+   * tick underruns and the driver drops the stream again.
+   */
+  bool start_stream(snd_pcm_t* handle, std::string* error);
+  /**
+   * Reopen the device when the driver's engine has gone idle.
+   *
+   * The RAVENNA module stops its 1 ms audio engine when the daemon tells it to
+   * restart (starting or restarting `aes67-daemon` does that, as does a sample
+   * rate change): both substreams stay open and report RUNNING, but not one
+   * frame moves - nothing is captured, our sources transmit nothing and the
+   * endpoints hear nothing, with no error anywhere.  Closing and reopening the
+   * PCM (what restarting the gateway does by hand) re-triggers the streams, so
+   * do exactly that, throttled, when no frames have arrived.
+   */
+  void recover_if_stalled();
   /** Device buffer -> float samples; returns the number of frames converted. */
   size_t to_float(const void* source, size_t samples, float* destination) const;
   /** float samples -> device buffer; returns the number of frames converted. */
@@ -66,6 +90,14 @@ class RavennaAudioBackend : public AudioBackend {
 
   std::vector<uint8_t> capture_raw_;
   std::vector<uint8_t> playback_raw_;
+
+  /** Negotiated playback geometry, used to prime the ring before triggering. */
+  snd_pcm_uframes_t playback_period_frames_{0};
+  snd_pcm_uframes_t playback_buffer_frames_{0};
+
+  /** monotonic time of the last captured frame, and of the last recovery. */
+  double last_frames_at_{0.0};
+  double last_recover_at_{0.0};
 
   std::atomic<unsigned> overruns_{0};
   std::atomic<unsigned> underruns_{0};

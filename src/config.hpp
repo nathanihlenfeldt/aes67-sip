@@ -98,11 +98,13 @@ struct LineAes67Config {
   bool ignore_refclk_gmid{false};  // skip the SDP/PTP grandmaster check
   /**
    * Advertise `a=ts-refclk:ptp=IEEE1588-2008:traceable` in our source's SDP
-   * instead of the explicit grandmaster clock ID.  Strict AES67 receivers accept
-   * "traceable", but some Dante implementations want the explicit ID and reject
-   * the flow otherwise - set this to false in that case.
+   * instead of the explicit grandmaster clock ID.  Default off: receivers that
+   * check the announced reference against the PTP domain's grandmaster - Q-SYS
+   * reports this as a "grandmaster mismatch" and refuses the flow - need the
+   * explicit ID we are actually locked to.  Only set it to true for receivers
+   * that insist on the RFC 7273 `traceable` keyword.
    */
-  bool refclk_ptp_traceable{true};
+  bool refclk_ptp_traceable{false};
   /**
    * Commissioning aid: when no endpoint SDP is configured, subscribe the sink to
    * our *own* source so the AES67 path can be exercised with the test tone.  Off
