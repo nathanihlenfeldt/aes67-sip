@@ -732,9 +732,8 @@ bool PjsipSipEngine::add_line(const LineConfig& line, std::string* error) {
           // "asterisk").
           const std::string realm =
               account->auth_realm.empty() ? "*" : account->auth_realm;
-          account_config.sipConfig.authCreds.push_back(
-              pj::AuthCredInfo("digest", realm, account->username, 0,
-                               account->password));
+          account_config.sipConfig.authCreds.push_back(pj::AuthCredInfo(
+              "digest", realm, account->username, 0, account->password));
         }
         if (config_.keep_alive_interval > 0) {
           account_config.natConfig.udpKaIntervalSec =

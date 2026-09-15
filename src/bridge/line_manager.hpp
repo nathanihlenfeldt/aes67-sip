@@ -83,6 +83,8 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
     int state_code{0};
     std::string detail;
     bool stream_configured{false};
+    /** Where the sink SDP came from: pasted | discovered | loopback | none. */
+    std::string sdp_source{"none"};
     int64_t ptt_hangup_at_ms{0};
     int64_t last_dial_ms{0};
     // cached daemon sink state, refreshed by the supervision thread
@@ -108,7 +110,8 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
    * sink.  Taken from `aes67.remote_sdp`, from the discovered source selected
    * with `aes67.remote_source_id`, or (for commissioning) from our own source.
    */
-  std::string resolve_endpoint_sdp(const LineConfig& line, std::string* error);
+  std::string resolve_endpoint_sdp(const LineConfig& line, std::string* origin,
+                                   std::string* error);
   /**
    * Resolves the *endpoint's* SDP for a line: an inline document
    * (`aes67.remote_sdp`) or a source discovered by SAP/mDNS

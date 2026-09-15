@@ -91,9 +91,17 @@ int LineManager::line_count() const {
 }
 
 std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
+                                              std::string* origin,
                                               std::string* error) {
+  const auto set_origin = [origin](const std::string& value) {
+    if (origin != nullptr) {
+      *origin = value;
+    }
+  };
+
   // 1. an SDP pasted into the configuration wins
   if (!trim(line.aes67.remote_sdp).empty()) {
+    set_origin("pasted");
     return line.aes67.remote_sdp;
   }
 
@@ -109,6 +117,7 @@ std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
               line.aes67.remote_source_id) {
             const std::string sdp = json_get<std::string>(source, "sdp", "");
             if (!trim(sdp).empty()) {
+              set_origin("discovered");
               return sdp;
             }
           }
@@ -121,24 +130,29 @@ std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
     } else if (error != nullptr) {
       *error = browse_error;
     }
+    set_origin("none");
     return {};
   }
 
-  // 3. nothing configured: loop our own source back so the AES67 path can be
-  //    commissioned (test tone) before the endpoints are wired up
+  // 3. Nothing configured.  Looping our own source back lets the AES67 path be
+  //    commissioned with the test tone before the endpoints are wired up, but it
+  //    must be loud: the gateway would otherwise appear healthy while receiving
+  //    nothing from site.
   std::string own_sdp;
   std::string sdp_error;
   if (daemon_->get_source_sdp(line.aes67.source_id, &own_sdp, &sdp_error)) {
-    LOG_INFO("line ", line.id,
-             ": no endpoint SDP configured, looping back AES67 "
-             "source ",
-             line.aes67.source_id, " for commissioning");
+    LOG_WARN("line ", line.id,
+             ": no endpoint SDP configured (aes67.remote_source_id or "
+             "aes67.remote_sdp): the sink subscribes to our OWN source, so no "
+             "endpoint audio is bridged - this is a commissioning loopback only");
+    set_origin("loopback");
     return own_sdp;
   }
   if (error != nullptr) {
     *error =
         "no endpoint SDP for line " + std::to_string(line.id) + ": " + sdp_error;
   }
+  set_origin("none");
   return {};
 }
 
@@ -177,7 +191,15 @@ void LineManager::configure_daemon_streams(const LineConfig& line) {
 
   json sink;
   std::string sdp_error;
-  const std::string remote_sdp = resolve_endpoint_sdp(line, &sdp_error);
+  std::string sdp_origin;
+  const std::string remote_sdp = resolve_endpoint_sdp(line, &sdp_origin, &sdp_error);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = lines_.find(line.id);
+    if (it != lines_.end()) {
+      it->second->sdp_source = sdp_origin;
+    }
+  }
   if (!DaemonClient::make_sink(config_->aes67_daemon, line, remote_sdp, &sink,
                                &error)) {
     LOG_WARN("line ", line.id, ": AES67 sink ", line.aes67.sink_id,
@@ -470,23 +492,25 @@ json LineManager::line_status(int line_id) const {
   LineState state = LineState::kIdle;
   int state_code = 0;
   std::string detail;
-  bool receiving = false;
-  bool sink_error = false;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto it = lines_.find(line_id);
-    if (it == lines_.end()) {
-      return nullptr;
+    bool receiving = false;
+    bool sink_error = false;
+    std::string sdp_source{"none"};
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const auto it = lines_.find(line_id);
+      if (it == lines_.end()) {
+        return nullptr;
+      }
+      const LineRuntime& line = *it->second;
+      call = engine_ != nullptr ? engine_->call_status(line_id) : CallStatus{};
+      config = line.config;
+      state = line.state;
+      state_code = line.state_code;
+      detail = line.detail;
+      receiving = line.sink_receiving;
+      sink_error = line.sink_error;
+      sdp_source = line.sdp_source;
     }
-    const LineRuntime& line = *it->second;
-    call = engine_ != nullptr ? engine_->call_status(line_id) : CallStatus{};
-    config = line.config;
-    state = line.state;
-    state_code = line.state_code;
-    detail = line.detail;
-    receiving = line.sink_receiving;
-    sink_error = line.sink_error;
-  }
 
   const AudioRouter::LineMeters meters = router_->meters(line_id);
 
@@ -513,6 +537,11 @@ json LineManager::line_status(int line_id) const {
   aes67["channels"] = config.aes67.channels;
   aes67["receiving"] = receiving;
   aes67["error"] = sink_error;
+  // Where the sink's SDP came from: "pasted" or "discovered" bridge the real
+  // endpoint; "loopback" means the sink is subscribed to our own source (a
+  // commissioning aid), so no endpoint audio is being received; "none" means
+  // there is no sink at all.
+  aes67["sdp_source"] = sdp_source;
   result["aes67"] = aes67;
 
   // rx/tx follow the AES67 (on site) point of view, which is what the operator
@@ -809,8 +838,14 @@ json LineManager::self_test() {
     const bool enabled = json_get<bool>(status, "enabled", true);
     const bool receiving =
         json_get_path<bool>(status, {"aes67", "receiving"}, false);
+    // levels.rx_dbfs is the AES67 input (the SIP facing ones are sip_rx_dbfs and
+    // sip_tx_dbfs); reading the wrong key here made this check report nothing.
     const double capture =
-        json_get_path<double>(status, {"levels", "aes67_dbfs"}, -1000.0);
+        json_get_path<double>(status, {"levels", "rx_dbfs"}, -1000.0);
+    const double sip_in =
+        json_get_path<double>(status, {"levels", "sip_rx_dbfs"}, -1000.0);
+    const std::string sdp_source =
+        json_get_path<std::string>(status, {"aes67", "sdp_source"}, "none");
 
     std::ostringstream detail;
     detail << state;
@@ -818,11 +853,27 @@ json LineManager::self_test() {
       detail << ", no RTP from the endpoint (check the sink SDP, the multicast "
                 "group and PTP lock)";
     } else if (capture > -999.0) {
-      detail << ", input " << static_cast<int>(capture) << " dBFS";
+      detail << ", AES67 input " << static_cast<int>(capture) << " dBFS";
     }
+    if (enabled) {
+      detail << ", endpoint sdp: " << sdp_source;
+      if (sdp_source == "loopback") {
+        detail << " (our own source: no endpoint is bridged)";
+      }
+      if (state == "in_call") {
+        detail << ", sip in "
+               << (sip_in > -999.0 ? std::to_string(static_cast<int>(sip_in))
+                                   : std::string("silent"))
+               << " dBFS";
+      }
+    }
+    const bool loopback_only = sdp_source == "loopback" || sdp_source == "none";
+    const bool dead_bridge = enabled && state == "in_call" &&
+                             capture < -999.0 && sip_in < -999.0;
     add("line " + std::to_string(id) + " (" +
             json_get<std::string>(status, "name", "") + ")",
-        !enabled || state != "error", detail.str());
+        !enabled || (state != "error" && !loopback_only && !dead_bridge),
+        detail.str());
   }
 
   return json{{"ok", all_ok}, {"checks", checks}};
