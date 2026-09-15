@@ -63,6 +63,39 @@ if command -v pipewire >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
+# 2b. CPU frequency scaling
+#
+# The RAVENNA documentation is explicit that CPU scaling events disturb AES67
+# streams ("unexpected distortion for a few seconds").  perf_cpu_time_max_percent
+# only disables the kernel's perf feedback; an ondemand/schedutil governor still
+# changes frequency under load, so pin "performance" and make it survive reboots.
+# ---------------------------------------------------------------------------
+echo "==> pinning the CPU governor to 'performance'"
+GOVERNOR_UNIT=/etc/systemd/system/aes67-cpu-governor.service
+run tee "${GOVERNOR_UNIT}" >/dev/null <<'EOF'
+[Unit]
+Description=Pin the CPU governor to performance for glitch free AES67 audio
+DefaultDependencies=no
+After=sysinit.target local-fs.target
+Before=multi-user.target aes67-daemon.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -w "$f" ] && echo performance > "$f"; done'
+ExecStop=/bin/true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+run systemctl daemon-reload
+run systemctl enable --now aes67-cpu-governor || true
+for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+  [[ -w "${cpu}" ]] && echo performance > "${cpu}" 2>/dev/null || true
+done
+echo "    governor now: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo n/a)"
+
+# ---------------------------------------------------------------------------
 # 3. Merging RAVENNA/AES67 kernel module
 # ---------------------------------------------------------------------------
 echo "==> checking the RAVENNA kernel module"
