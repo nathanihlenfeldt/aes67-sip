@@ -2,6 +2,10 @@
 
 #include "bridge/line_manager.hpp"
 
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/socket.h>
+
 #include <algorithm>
 #include <chrono>
 #include <sstream>
@@ -15,6 +19,36 @@ namespace {
 
 constexpr int kSupervisionIntervalMs = 100;
 constexpr int64_t kSinkPollIntervalMs = 2000;
+
+/**
+ * Host part of a registrar string: strips an optional sip:/sips: scheme and an
+ * optional user@ part, so "sip:2001@10.0.0.5:5060" becomes "10.0.0.5:5060".
+ */
+std::string registrar_host(const std::string& registrar) {
+  std::string value = registrar;
+  for (const std::string scheme : {"sips:", "sip:"}) {
+    const size_t pos = value.find(scheme);
+    if (pos != std::string::npos) {
+      value = value.substr(pos + scheme.size());
+      break;
+    }
+  }
+  const size_t at = value.find('@');
+  if (at != std::string::npos) {
+    value = value.substr(at + 1);
+  }
+  return value;
+}
+
+/** DNS host (no port) of a registrar, for the reachability check. */
+std::string registrar_dns_host(const std::string& registrar) {
+  std::string value = registrar_host(registrar);
+  const size_t colon = value.find(':');
+  if (colon != std::string::npos) {
+    value = value.substr(0, colon);
+  }
+  return value;
+}
 
 bool is_auto_answer_mode(const std::string& mode) {
   const std::string value = to_lower(mode);
@@ -711,8 +745,50 @@ json LineManager::self_test() {
   // ---- SIP ---------------------------------------------------------------
   if (engine_ != nullptr) {
     for (const auto& account : engine_->account_status()) {
-      add("sip account " + account.id, account.state == "registered",
-          account.state + " " + account.uri + " " + account.error);
+      std::string detail = account.state + " " + account.uri;
+      if (account.code != 0) {
+        detail += " (sip " + std::to_string(account.code) + ")";
+      }
+      if (!account.error.empty()) {
+        detail += " " + account.error;
+      }
+      add("sip account " + account.id, account.state == "registered", detail);
+    }
+
+    // Can we even resolve the registrar?  This is the most common reason a
+    // registration silently never leaves the appliance.
+    for (const auto& account : config_->accounts) {
+      const std::string host = registrar_dns_host(account.registrar);
+      if (host.empty()) {
+        add("sip registrar " + account.id, false,
+            "no registrar configured");
+        continue;
+      }
+      struct addrinfo hints {};
+      hints.ai_family = AF_UNSPEC;
+      hints.ai_socktype = SOCK_DGRAM;
+      struct addrinfo* result = nullptr;
+      const int rc = ::getaddrinfo(host.c_str(), nullptr, &hints, &result);
+      std::string detail;
+      const bool ok = rc == 0 && result != nullptr;
+      if (ok) {
+        char text[INET6_ADDRSTRLEN] = {0};
+        const void* address =
+            result->ai_family == AF_INET
+                ? static_cast<const void*>(
+                      &reinterpret_cast<sockaddr_in*>(result->ai_addr)->sin_addr)
+                : static_cast<const void*>(&reinterpret_cast<sockaddr_in6*>(
+                                               result->ai_addr)
+                                               ->sin6_addr);
+        ::inet_ntop(result->ai_family, address, text, sizeof(text));
+        detail = host + " resolves to " + text;
+      } else {
+        detail = host + " does not resolve (" + ::gai_strerror(rc) + ")";
+      }
+      if (result != nullptr) {
+        ::freeaddrinfo(result);
+      }
+      add("sip registrar " + account.id, ok, detail);
     }
   } else {
     add("sip engine", false, "SIP is disabled");

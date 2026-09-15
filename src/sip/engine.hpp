@@ -29,6 +29,8 @@ struct AccountStatus {
       "unregistered"};  // registered | registering | unregistered | error
   std::string uri;
   std::string error;
+  /** Last SIP status code of the registration (200 = ok, 401/403/408/... ). */
+  int code{0};
 };
 
 /** State of the (single) call of a line. */

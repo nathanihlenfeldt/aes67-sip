@@ -144,7 +144,8 @@ json ApiServer::build_status() const {
       accounts.push_back(json{{"id", account.id},
                               {"state", account.state},
                               {"uri", account.uri},
-                              {"error", account.error}});
+                              {"error", account.error},
+                              {"code", account.code}});
     }
   }
   sip["accounts"] = accounts;

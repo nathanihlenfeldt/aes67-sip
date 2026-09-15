@@ -326,11 +326,21 @@ std::string PjsipSipEngine::local_aor(const LineConfig& line) const {
   std::string host = "localhost";
   const SipAccountConfig* account = account_config(line.sip.account);
   if (account != nullptr && !account->registrar.empty()) {
-    // sip:user@host:port -> host[:port]
+    // Accept "sip:host", "sip:host:port", "sip:user@host", "user@host:port",
+    // "host" and "host:port": strip an optional scheme and an optional user part,
+    // otherwise a registrar like "sip:2001@10.0.0.5" would yield an invalid AOR
+    // ("sip:2001@2001@10.0.0.5") and registration could never succeed.
     std::string registrar = account->registrar;
-    const size_t colon = registrar.find(':');
-    if (colon != std::string::npos) {
-      registrar = registrar.substr(colon + 1);
+    for (const std::string scheme : {"sips:", "sip:"}) {
+      const size_t pos = registrar.find(scheme);
+      if (pos != std::string::npos) {
+        registrar = registrar.substr(pos + scheme.size());
+        break;
+      }
+    }
+    const size_t at = registrar.find('@');
+    if (at != std::string::npos) {
+      registrar = registrar.substr(at + 1);
     }
     if (!registrar.empty()) {
       host = registrar;
@@ -539,17 +549,22 @@ void PjsipSipEngine::notify_reg_state(int line_id, int code,
   if (!uri.empty()) {
     status.uri = uri;
   }
+  status.code = code;
   if (registered) {
     status.state = "registered";
     status.error.clear();
   } else if (code == 0) {
     status.state = "unregistered";
-    status.error = reason;
+    // Keep the last real reason: a later event with an empty reason (the
+    // periodic "unregistered" notification) must not wipe 401/403/408 text.
+    if (!reason.empty()) {
+      status.error = reason;
+    }
   } else {
     status.state = "error";
     status.error = reason.empty()
                        ? ("registration failed (" + std::to_string(code) + ")")
-                       : reason;
+                       : (std::to_string(code) + " " + reason);
   }
   LOG_INFO("line ", line_id, ": registration ", status.state,
            status.error.empty() ? "" : (" (" + status.error + ")"));
@@ -738,14 +753,26 @@ bool PjsipSipEngine::add_line(const LineConfig& line, std::string* error) {
           return false;
         }
 
-        AccountStatus initial;
-        initial.id = account->id;
-        initial.uri = aor;
-        initial.state = "unregistered";
         {
           std::lock_guard<std::mutex> state_lock(state_mutex_);
           account_index_[line.id] = context->account.get();
-          reg_status_[line.id] = initial;
+          const auto existing = reg_status_.find(line.id);
+          if (existing == reg_status_.end()) {
+            AccountStatus initial;
+            initial.id = account->id;
+            initial.uri = aor;
+            initial.state = "unregistered";
+            reg_status_[line.id] = initial;
+          } else {
+            // A registration callback can arrive before this point (it does for
+            // a DNS failure: account->create() above reports it in the same
+            // millisecond), so never clear an existing state/reason - doing so
+            // left the UI showing a bare "unregistered" with no explanation.
+            if (existing->second.id.empty()) {
+              existing->second.id = account->id;
+            }
+            existing->second.uri = aor;
+          }
         }
 
         lines_[line.id] = std::move(context);
@@ -1004,6 +1031,7 @@ std::vector<AccountStatus> PjsipSipEngine::account_status() const {
     if (rank(status.state) > rank(it->second.state)) {
       it->second.state = status.state;
       it->second.error = status.error;
+      it->second.code = status.code;
     }
     it->second.uri = status.uri;
   }
