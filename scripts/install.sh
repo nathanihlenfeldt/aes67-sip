@@ -474,6 +474,30 @@ if [[ ${SKIP_GATEWAY} -eq 0 ]]; then
       -DPJSIP_ROOT="${SRC_DIR}/third_party/pjsip-install" >/dev/null
     cmake --build "${SRC_DIR}/build" -j"${JOBS}"
     install -m 0755 "${SRC_DIR}/build/aes67-sip" "${PREFIX}/bin/aes67-sip"
+
+    # build-pjsip.sh builds pjproject as *shared* libraries inside the source
+    # tree, which is not on the dynamic loader path.  Without this the service
+    # dies at startup with "error while loading shared libraries: libpjsua.so.2"
+    # (systemd then restart-loops it and the web UI is unreachable), so install
+    # them next to the binary and refresh the loader cache.
+    PJSIP_LIB_DIR="${SRC_DIR}/third_party/pjsip-install/lib"
+    if compgen -G "${PJSIP_LIB_DIR}/lib*.so*" >/dev/null; then
+      run install -d "${PREFIX}/lib"
+      run bash -c "cp -a '${PJSIP_LIB_DIR}'/lib*.so* '${PREFIX}/lib/'"
+      run bash -c "echo '${PREFIX}/lib' > /etc/ld.so.conf.d/aes67-sip.conf"
+      run ldconfig
+      log "pjproject shared libraries installed into ${PREFIX}/lib"
+    fi
+
+    # Fail loudly if the binary still cannot resolve its libraries.
+    if command -v ldd >/dev/null 2>&1; then
+      MISSING_LIBS="$(ldd "${PREFIX}/bin/aes67-sip" 2>/dev/null |
+        awk '/not found/ {print $1}' | tr '\n' ' ')"
+      if [[ -n "${MISSING_LIBS}" ]]; then
+        warn "the gateway cannot resolve: ${MISSING_LIBS}"
+        warn "check 'ldd ${PREFIX}/bin/aes67-sip' and /etc/ld.so.conf.d/aes67-sip.conf"
+      fi
+    fi
   fi
 
   # web UI
@@ -608,6 +632,16 @@ if [[ ${SKIP_DAEMON} -eq 0 ]]; then
   report_line "aes67-daemon" "${PTP:-unreachable on :8080}"
 fi
 if [[ ${SKIP_GATEWAY} -eq 0 ]]; then
+  # A missing shared library shows up as a crash loop, so check it explicitly.
+  if command -v ldd >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/aes67-sip" ]]; then
+    MISSING_LIBS="$(ldd "${PREFIX}/bin/aes67-sip" 2>/dev/null |
+      awk '/not found/ {print $1}' | tr '\n' ' ')"
+    if [[ -n "${MISSING_LIBS}" ]]; then
+      report_line "aes67-sip link" "MISSING LIBRARIES: ${MISSING_LIBS}"
+    else
+      report_line "aes67-sip link" "all libraries resolved"
+    fi
+  fi
   # Give the service a few seconds to come up, then diagnose it if it does not.
   GW=""
   for _ in $(seq 1 12); do

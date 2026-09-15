@@ -7,6 +7,11 @@ Wants=network-online.target
 # be up first (it is not fatal when it is not: the gateway keeps retrying).
 After=aes67-daemon.service
 Wants=aes67-daemon.service
+# A crash loop means something is really wrong (missing library, bad config):
+# give up after a few attempts instead of hammering, so `systemctl status` shows
+# the failure rather than "activating" forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
