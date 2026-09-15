@@ -152,12 +152,31 @@ if(PJSIP_AVAILABLE)
   target_link_libraries(aes67-sip-core PRIVATE ${PJSIP_LIBRARIES})
   target_include_directories(aes67-sip-core PRIVATE ${PJSIP_INCLUDE_DIRS})
   target_compile_definitions(aes67-sip-core PUBLIC WITH_PJSIP=1)
-  if(APPLE)
-    # pjproject 2.17's pj/compat/m_auto.h does not detect the endianness of
-    # clang on Apple Silicon, so pj/config.h aborts with "Endianness must be
-    # declared for this processor".  All supported Apple CPUs are little endian.
+
+  # pjproject 2.17's pj/compat/m_auto.h does not detect the endianness on
+  # aarch64 (Linux or Apple Silicon), so pj/config.h aborts with "#error
+  # Endianness must be declared for this processor".  Detect it here and pass
+  # the answer to the library.
+  include(TestBigEndian)
+  test_big_endian(AES67_SIP_BIG_ENDIAN)
+  if(AES67_SIP_BIG_ENDIAN)
+    target_compile_definitions(aes67-sip-core PRIVATE
+      PJ_IS_BIG_ENDIAN=1 PJ_IS_LITTLE_ENDIAN=0)
+  else()
     target_compile_definitions(aes67-sip-core PRIVATE
       PJ_IS_LITTLE_ENDIAN=1 PJ_IS_BIG_ENDIAN=0)
+  endif()
+
+  # build-pjsip.sh builds pjproject as shared libraries inside the source tree,
+  # so the binaries need an rpath to be runnable straight from the build tree.
+  if(PJSIP_LINK_DIRS)
+    foreach(_pjsip_dir IN LISTS PJSIP_LINK_DIRS)
+      target_link_options(aes67-sip-core INTERFACE "-Wl,-rpath,${_pjsip_dir}")
+    endforeach()
+    unset(_pjsip_dir)
+  endif()
+
+  if(APPLE)
     # The macOS pjproject binaries expect the system audio/network frameworks.
     target_link_libraries(aes67-sip-core PRIVATE
       "-framework CoreAudio"
