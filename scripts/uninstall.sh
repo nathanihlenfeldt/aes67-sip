@@ -19,7 +19,9 @@
 #                    /etc/daemon.conf, /etc/status.json, /var/lib/aes67-daemon
 #   * PJSIP          /usr/local/lib/libpj*.so*, /etc/ld.so.conf.d/aes67-sip.conf
 #   * RAVENNA module unloaded, DKMS entry, /usr/src/ravenna-alsa-lkm*,
-#                    /etc/modules-load.d/ravenna.conf
+#                    /etc/modules-load.d/ravenna.conf *and* the driver's own
+#                    merging-ravenna.conf, plus a hand-installed copy in
+#                    /lib/modules/*/extra/MergingRavennaALSA.ko
 #   * kernel tuning  /etc/sysctl.d/90-aes67.conf (values reset), the CPU
 #                    governor unit, the governor itself
 #   * users          aes67-sip (with its home), aes67-daemon, group aes67-sip
@@ -323,7 +325,17 @@ else
   for src in /usr/src/ravenna-alsa-lkm /usr/src/ravenna-alsa-lkm-*; do
     remove_path "${src}"
   done
-  remove_path "${MODULES_LOAD}"
+  # The module can also be here without DKMS knowing about it: the driver's own
+  # `make install` puts it in extra/ and writes its own load file, which is how a
+  # module built by hand survives a kernel upgrade - and this uninstall, until the
+  # load file was removed too.  Both names are checked, because the driver's file
+  # is not the one install.sh writes.
+  for load in "${MODULES_LOAD}" /etc/modules-load.d/merging-ravenna.conf; do
+    remove_path "${load}"
+  done
+  for module in /lib/modules/*/extra/"${MODULE_NAME}".ko; do
+    remove_path "${module}"
+  done
   if [[ ${DRY_RUN} -eq 0 ]]; then
     run depmod -a || warn "depmod failed"
   fi
