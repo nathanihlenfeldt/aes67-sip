@@ -598,6 +598,26 @@ std::vector<MatrixLineStatus> IntercomMatrix::status() const {
       member_status.contribution_db = member.contribution_db;
       member_status.level_dbfs = member.meter.value.load();
       member_status.arriving = member_status.level_dbfs > kArrivalThresholdDbfs;
+
+      // The summary is derived here, once: a member's name is what a person
+      // looks for in the report, and its talk binding is what decides whether
+      // silence means "nobody is talking" or "this member cannot be heard".
+      MatrixLineSummary& summary = line_status.summary;
+      const std::string name = member_status.endpoint_name.empty()
+                                   ? member_status.endpoint
+                                   : member_status.endpoint_name;
+      summary.members += 1;
+      if (member_status.talk_channel < 0) {
+        summary.unbound += 1;
+        summary.unbound_names.push_back(name);
+      } else if (member_status.arriving) {
+        summary.arriving += 1;
+        summary.arriving_names.push_back(name);
+      } else {
+        summary.silent += 1;
+        summary.silent_names.push_back(name);
+      }
+
       line_status.members.push_back(std::move(member_status));
     }
     result.push_back(std::move(line_status));

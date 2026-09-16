@@ -989,6 +989,112 @@ TEST_CASE(matrix_accepts_a_valid_configuration_unchanged) {
   CHECK(empty_plan.empty());
 }
 
+TEST_CASE(matrix_summary_names_who_is_arriving_silent_and_unbound) {
+  // One line, three members: one talking, one bound but quiet, one with no talk
+  // channel bound at all.  The three are different things and the summary says so.
+  MatrixPlan plan;
+  plan.endpoints.push_back(endpoint("talker", {0}, {0}));
+  plan.endpoints.push_back(endpoint("quiet", {1}, {1}));
+  plan.endpoints.push_back(endpoint("listener", {2}, {2}));
+  plan.lines.push_back(line("pl1", {member("talker", 0, 0), member("quiet", 0, 0),
+                                    member("listener", -1, 0)}));
+
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(plan, &error));
+
+  const std::vector<float> capture(kChannels * kFrames, 0.0F);
+  std::vector<float> capture_block = capture;
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    capture_block[frame * kChannels + 0] = 0.5F;  // only "talker" talks
+  }
+  std::vector<float> playback(kChannels * kFrames, 0.0F);
+  matrix.process(capture_block.data(), playback.data(), kChannels, kFrames);
+
+  MatrixLineStatus status = matrix.status()[0];
+  CHECK_EQ(status.summary.members, 3U);
+  CHECK_EQ(status.summary.arriving, 1U);
+  CHECK_EQ(status.summary.silent, 1U);
+  CHECK_EQ(status.summary.unbound, 1U);
+  // Named by their endpoint names, which is what a person searches for.
+  CHECK_EQ(status.summary.arriving_names, std::vector<std::string>({"talker"}));
+  CHECK_EQ(status.summary.silent_names, std::vector<std::string>({"quiet"}));
+  CHECK_EQ(status.summary.unbound_names, std::vector<std::string>({"listener"}));
+  CHECK(status.summary.can_be_heard());  // two members can talk
+  CHECK(!status.summary.quiet());        // and one of them is talking
+  CHECK_EQ(std::string(status.summary.state()), std::string("active"));
+
+  // A member that stops talking is reported within a bounded time: the meter holds
+  // its peak and decays 0.5 dB per millisecond, so an 8-frame block decays about
+  // 0.083 dB.  A 0.5 peak sits at -6 dBFS and the arrival threshold is -60, so 54
+  // dB takes about 650 blocks - a little over 100 ms of audio.  Asserted in blocks,
+  // never in wall clock, so the bound is exact.
+  std::vector<float> quiet_playback(kChannels * kFrames, 0.0F);
+  for (unsigned block = 0; block < 700; ++block) {
+    matrix.process(capture.data(), quiet_playback.data(), kChannels, kFrames);
+  }
+  status = matrix.status()[0];
+  CHECK_EQ(status.summary.arriving, 0U);
+  CHECK_EQ(status.summary.silent, 2U);
+  CHECK_EQ(status.summary.silent_names,
+           std::vector<std::string>({"talker", "quiet"}));
+  // Two members can still talk, so a silent line is not a broken one: it is
+  // quiet, and says so rather than claiming health or failure.
+  CHECK(status.summary.can_be_heard());
+  CHECK(status.summary.quiet());
+  CHECK_EQ(std::string(status.summary.state()), std::string("quiet"));
+
+  // A line nobody can talk on is the broken case, and it is a configuration fact
+  // rather than silence.
+  MatrixPlan mute_only;
+  mute_only.endpoints.push_back(endpoint("listener", {0}, {0}));
+  mute_only.lines.push_back(line("pl2", {member("listener", -1, 0)}));
+  IntercomMatrix listeners;
+  CHECK(listeners.configure(mute_only, &error));
+  const MatrixLineStatus listen_only = listeners.status()[0];
+  CHECK_EQ(listen_only.summary.members, 1U);
+  CHECK_EQ(listen_only.summary.unbound, 1U);
+  CHECK(!listen_only.summary.can_be_heard());
+  CHECK(!listen_only.summary.quiet());
+  CHECK_EQ(std::string(listen_only.summary.state()),
+           std::string("cannot_be_heard"));
+}
+
+TEST_CASE(matrix_line_summary_reports_a_dead_member_without_taking_the_line_down) {
+  // "a" and "b" share a line; only "a" is heard from.  The line keeps mixing - "b"
+  // still hears "a" - and the summary says who has gone quiet.
+  MatrixPlan plan;
+  plan.endpoints.push_back(endpoint("a", {0}, {1}));
+  plan.endpoints.push_back(endpoint("b", {1}, {0}));
+  plan.lines.push_back(line("pl1", {member("a", 0, 0), member("b", 0, 0)}));
+
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(plan, &error));
+
+  std::vector<float> capture(kChannels * kFrames, 0.0F);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    capture[frame * kChannels + 0] = 0.5F;  // "a" alone
+  }
+  std::vector<float> playback(kChannels * kFrames, 0.0F);
+  matrix.process(capture.data(), playback.data(), kChannels, kFrames);
+
+  const MatrixLineStatus status = matrix.status()[0];
+  CHECK_EQ(status.summary.members, 2U);
+  CHECK_EQ(status.summary.arriving, 1U);
+  CHECK_EQ(status.summary.arriving_names, std::vector<std::string>({"a"}));
+  CHECK_EQ(status.summary.silent, 1U);
+  CHECK_EQ(status.summary.silent_names, std::vector<std::string>({"b"}));
+  CHECK(status.summary.can_be_heard());
+  CHECK(!status.summary.quiet());
+
+  // The dead member did not take the line down: "b" hears "a" on the channel it
+  // listens on.
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback[frame * kChannels + 0], 0.5, 1e-4);
+  }
+}
+
 TEST_CASE(matrix_applies_the_contribution_level) {
   MatrixPlan plan;
   plan.endpoints.push_back(endpoint("a", {0}, {0}));

@@ -147,7 +147,8 @@ intercom use case:
    `sudo ptp4l -i eth0 -m -l7 -E -S`
 3. Open `http://<appliance>:8081`:
    - **Dashboard** - PTP, daemon reachability, SIP registrations, per-line state/levels,
-     and the conference leg when one is configured
+     the conference leg when one is configured, and each party line with who is arriving
+     and who has gone silent
    - **Lines** - channel mapping, gain/mute, call controls, DTMF, test tone
    - **Party lines** - the commissioning view and editor: each line with its members,
      their contribution levels and live levels, and membership, levels and per-channel
@@ -170,7 +171,15 @@ intercom use case:
    stopped ... reopening the device`. No operator action is needed.
 
 The built-in self-test (`POST /api/system/self-test`) checks the audio backend, the
-daemon, PTP, SIP registration and each line in one go.
+daemon, PTP, SIP registration, each line and each party line in one go. A party-line
+check names its members and says who is arriving and who has gone silent, so a dead
+endpoint, a muted headset or a pulled cable is findable from the UI rather than by reading
+journals: a line whose members are simply quiet says so and names them, while a line where
+nobody *can* talk - no member has a talk channel bound - is the one reported as broken.
+The appliance does not claim to tell a quiet room from every cable on a line being pulled;
+the names are what a maintenance engineer works from. When the audio path is not running
+the party lines are not judged at all, and the audio backend check says what that costs
+the site; the same facts are on the dashboard, which polls them every 500 ms.
 
 ### Interop notes (Q-SYS, Dante)
 

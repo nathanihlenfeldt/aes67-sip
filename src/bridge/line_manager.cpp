@@ -1110,8 +1110,17 @@ json LineManager::self_test() {
 
   // ---- audio path --------------------------------------------------------
   const bool audio_ok = router_ != nullptr && router_->running();
-  add("audio backend", audio_ok,
-      router_ != nullptr ? router_->backend_detail() : "not started");
+  std::string audio_detail =
+      router_ != nullptr ? router_->backend_detail() : "not started";
+  // The party lines cannot be mixed or judged without the audio path, so the
+  // consequence is stated where the cause is: the matrix is not accused of a
+  // failure it cannot have caused, and neither is it reported healthy.
+  const bool matrix_configured = matrix_ != nullptr && !matrix_->empty();
+  if (!audio_ok && matrix_configured) {
+    audio_detail +=
+        " - the party lines are not being mixed while the audio path is down";
+  }
+  add("audio backend", audio_ok, audio_detail);
 
   // ---- AES67 daemon ------------------------------------------------------
   std::string daemon_version;
@@ -1253,6 +1262,40 @@ json LineManager::self_test() {
             json_get<std::string>(status, "name", "") + ")",
         !enabled || (state != "error" && !dead_bridge && !endpoint_silent),
         detail.str());
+  }
+
+  // ---- the matrix: the party lines and who is on them ---------------------
+  // Judged only when the audio path is up: without it the matrix cannot mix, so
+  // there is nothing to judge and nothing to blame - the audio backend check says
+  // what the consequence is (see its detail), and no line is reported healthy.
+  if (matrix_configured && audio_ok) {
+    for (const auto& line : matrix_->status()) {
+      const MatrixLineSummary& summary = line.summary;
+      std::ostringstream detail;
+      detail << summary.members << " member(s), " << summary.arriving
+             << " arriving";
+      if (!summary.arriving_names.empty()) {
+        detail << " (" << join(summary.arriving_names, ", ") << ")";
+      }
+      if (summary.silent > 0) {
+        detail << ", " << summary.silent << " silent ("
+               << join(summary.silent_names, ", ") << ")";
+      }
+      if (summary.unbound > 0) {
+        detail << ", " << summary.unbound << " with no talk channel bound ("
+               << join(summary.unbound_names, ", ") << ")";
+      }
+      if (summary.quiet()) {
+        detail << " - nobody is talking on this line";
+      }
+      if (!summary.can_be_heard()) {
+        detail << " - no member can be heard on this line";
+      }
+      // Not ok only when the line cannot carry anybody at all: a line whose
+      // members are simply silent is nobody talking, not a fault.
+      add("party line " + line.id + " (" + line.name + ")", summary.can_be_heard(),
+          detail.str());
+    }
   }
 
   // ---- conference leg ----------------------------------------------------

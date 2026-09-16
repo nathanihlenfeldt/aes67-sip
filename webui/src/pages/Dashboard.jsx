@@ -35,6 +35,7 @@ export default function Dashboard() {
   const sip = status?.sip || {};
   const conference = status?.conference || {};
   const lines = arr(status?.lines);
+  const partyLines = arr(status?.party_lines);
   const accounts = arr(sip.accounts);
   // The party lines that claim the conference, which is what decides whether the
   // off-site leg carries anything either way.
@@ -221,6 +222,79 @@ export default function Dashboard() {
             and its <span className="mono">target</span>, and tick <em>conference</em> on the party
             lines that should reach it.
           </div>
+        )}
+      </Card>
+
+      <Card
+        title="Party lines"
+        subtitle="who is on each line, and who has gone silent"
+        bodyClass="flush"
+        actions={
+          <Link className="btn btn-small" to="/party-lines">
+            commission
+          </Link>
+        }
+      >
+        {partyLines.length === 0 ? (
+          <div className="empty">
+            No party lines are configured, so nothing is being mixed on the appliance.
+          </div>
+        ) : (
+          <table className="table table-dense">
+            <thead>
+              <tr>
+                <th>Line</th>
+                <th>Members</th>
+                <th>Arriving</th>
+                <th>Silent</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {partyLines.map((line) => {
+                const summary = line.summary || {};
+                const silent = arr(summary.silent_names);
+                const unbound = arr(summary.unbound_names);
+                // The matrix decides the word (and says why): the dashboard shows
+                // it rather than judging for itself, and shows "unknown" when a
+                // gateway does not report it at all.
+                const state = line.state || 'unknown';
+                const tone = state === 'active' ? 'ok' : state === 'quiet' ? 'off' : 'err';
+                const why =
+                  state === 'cannot_be_heard'
+                    ? 'no member of this line has a talk channel bound'
+                    : state === 'quiet'
+                      ? 'nobody is talking on this line right now'
+                      : state === 'active'
+                        ? 'members of this line are being heard'
+                        : 'the gateway did not report this line’s state';
+                return (
+                  <tr key={line.id}>
+                    <td className="truncate" title={line.id}>
+                      {line.name || line.id}
+                    </td>
+                    <td className="mono">{fmtInt(summary.members)}</td>
+                    <td className="mono">{fmtInt(summary.arriving)}</td>
+                    <td className="truncate" title={[...silent, ...unbound].join(', ')}>
+                      {silent.length ? silent.join(', ') : '—'}
+                      {unbound.length ? (
+                        <span className="muted small"> · cannot talk: {unbound.join(', ')}</span>
+                      ) : null}
+                    </td>
+                    <td>
+                      <StatusPill
+                        state={state}
+                        tone={state === 'unknown' ? 'warn' : tone}
+                        title={why}
+                      >
+                        {state === 'cannot_be_heard' ? 'broken' : state}
+                      </StatusPill>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </Card>
 

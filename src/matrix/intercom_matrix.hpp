@@ -77,12 +77,56 @@ struct MatrixMemberStatus {
   bool arriving{false};
 };
 
+/**
+ * What a line's members are doing, as one derived fact rather than three counts
+ * each consumer computes for itself: the self-test, the API and the UI all read
+ * this, so "who has gone silent" cannot be answered two different ways.
+ *
+ * A member with no talk channel bound cannot be heard on this line at all (it may
+ * still listen), which is a configuration fact and not silence: a line where
+ * nobody can talk is the one state that is genuinely broken, while a line whose
+ * members are merely quiet is not.
+ */
+struct MatrixLineSummary {
+  unsigned members{0};
+  unsigned arriving{0};  // bound, and audio is reaching the appliance
+  unsigned silent{0};    // bound, but nothing is arriving
+  unsigned unbound{0};   // no talk channel bound: cannot be heard here
+  std::vector<std::string> arriving_names;
+  std::vector<std::string> silent_names;
+  std::vector<std::string> unbound_names;
+
+  /** True when at least one member can be heard on this line. */
+  bool can_be_heard() const { return members > unbound; }
+  /** True when the line can be heard and nobody is talking on it right now. */
+  bool quiet() const { return can_be_heard() && arriving == 0; }
+
+  /**
+   * The one word a report or a UI shows, so neither has to re-derive it: `active`
+   * (someone is being heard), `quiet` (the line works, nobody is talking) or
+   * `cannot_be_heard` (no member has a talk channel bound, so the line carries
+   * nothing - the one state that is broken rather than silent).
+   *
+   * A line whose members are all silent is `quiet`, and the appliance does not
+   * claim more than it knows: with only per-member level meters, a quiet room and
+   * every cable on that line being pulled look the same, which is why the names of
+   * the silent members matter more than the verdict.
+   */
+  const char* state() const {
+    if (!can_be_heard()) {
+      return "cannot_be_heard";
+    }
+    return arriving > 0 ? "active" : "quiet";
+  }
+};
+
 struct MatrixLineStatus {
   std::string id;
   std::string name;
   /** True when this line's members are on the off-site conference call. */
   bool claims_conference{false};
   std::vector<MatrixMemberStatus> members;
+  MatrixLineSummary summary;
 };
 
 /**

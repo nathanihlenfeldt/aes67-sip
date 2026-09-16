@@ -141,9 +141,28 @@ members are on the off-site call, so the choice is visible without reading the
 configuration. It is an empty array when no party lines are declared, which is also
 how a gateway that only bridges SIP lines reports itself.
 
+Each line also carries the derived `summary` the dashboard and the self-test read, so
+"who has gone silent" is answered one way: `members`, `arriving`, `silent` (a talk channel
+is bound but nothing is arriving) and `unbound` (no talk channel bound, so that member
+cannot be heard on this line at all), with `arriving_names` / `silent_names` /
+`unbound_names` naming them. `state` is the one word to show: `active` (someone is being
+heard), `quiet` (the line works and nobody is talking) or `cannot_be_heard` (no member has
+a talk channel bound - the one state that is broken rather than silent). `can_be_heard` and
+`quiet` are the same two facts as booleans.
+
+A line whose members are *all* silent is `quiet`, and the API does not claim more than the
+appliance knows: with per-member level meters alone, a quiet room and every cable on that
+line being pulled look the same. What makes it findable is the names - `silent_names`
+carries every member that has gone quiet - rather than a verdict the appliance cannot
+support.
+
 ```json
 "party_lines": [
   { "id": "cameras", "name": "Cameras", "claims_conference": true,
+    "state": "active", "can_be_heard": true, "quiet": false,
+    "summary": { "members": 2, "arriving": 1, "silent": 1, "unbound": 0,
+                 "arriving_names": ["Camera 1"], "silent_names": ["Camera 2"],
+                 "unbound_names": [] },
     "members": [
       { "endpoint": "a", "name": "Camera 1", "talk_channel": 0, "listen_channel": 0,
         "contribution_db": 0.0, "level_dbfs": -6.0, "arriving": true },

@@ -7,6 +7,7 @@
 #include <httplib.h>
 
 #include "audio/backend.hpp"
+#include "audio/null_backend.hpp"
 #include "audio/router.hpp"
 #include "bridge/line_manager.hpp"
 #include "config.hpp"
@@ -1263,6 +1264,197 @@ TEST_CASE(conference_leg_isolation_holds_in_both_directions) {
   CHECK(conference_hears());
 
   gateway.stop();
+}
+
+// ---------------------------------------------------------------------------
+// the matrix in the self-test: who is on each line, and who has gone silent
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/** The self-test check named `name`, or null. */
+json self_test_check(const json& result, const std::string& name) {
+  if (!result.is_object() || !result.contains("checks") ||
+      !result.at("checks").is_array()) {
+    return nullptr;
+  }
+  for (const auto& check : result.at("checks")) {
+    if (json_get<std::string>(check, "name", "") == name) {
+      return check;
+    }
+  }
+  return nullptr;
+}
+
+/** The `party_lines[]` entry for `id`, or null. */
+json summary_of(const json& status, const std::string& id) {
+  if (!status.is_object() || !status.contains("party_lines")) {
+    return nullptr;
+  }
+  for (const auto& line : status.at("party_lines")) {
+    if (json_get<std::string>(line, "id", "") == id) {
+      return line;
+    }
+  }
+  return nullptr;
+}
+
+/** Runs the self-test over HTTP. */
+json run_self_test(httplib::Client& client) {
+  const auto response =
+      client.Post("/api/system/self-test", "", "application/json");
+  if (!response || response->status != 200) {
+    return nullptr;
+  }
+  return json::parse(response->body);
+}
+
+/** The simulated device, so a test can make every member talk or stop talking. */
+NullAudioBackend* null_backend(AudioBackend* backend) {
+  return dynamic_cast<NullAudioBackend*>(backend);
+}
+
+}  // namespace
+
+TEST_CASE(rest_api_self_test_reports_each_party_line_and_who_is_silent) {
+  Gateway gateway(true, [](Config& config) {
+    config = party_line_config();
+    config.audio.null_tone_hz = 0.0;  // silence first: the members are quiet
+  });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  // The device is silent, so no member is arriving - and that is not a failure:
+  // the report says nobody is talking, and names the members it cannot hear from.
+  json result = run_self_test(client);
+  CHECK(!result.is_null());
+  json check = self_test_check(result, "party line cameras (Cameras)");
+  CHECK(!check.is_null());
+  CHECK(check.at("detail").get<std::string>().find("2 member(s), 0 arriving") !=
+        std::string::npos);
+  CHECK(check.at("detail").get<std::string>().find(
+            "2 silent (Camera 1, Camera 2)") != std::string::npos);
+  CHECK(check.at("detail").get<std::string>().find("nobody is talking") !=
+        std::string::npos);
+  CHECK(check.at("ok").get<bool>());  // quiet is not broken
+
+  json line = summary_of(get_json(client, "/api/status"), "cameras");
+  CHECK(!line.is_null());
+  CHECK_EQ(line.at("state").get<std::string>(), std::string("quiet"));
+  CHECK_EQ(line.at("summary").at("members").get<unsigned>(), 2U);
+  CHECK_EQ(line.at("summary").at("arriving").get<unsigned>(), 0U);
+  CHECK(line.at("quiet").get<bool>());
+  CHECK(line.at("can_be_heard").get<bool>());
+
+  // Audio starts arriving: the same report follows within a bounded time, which is
+  // also what the dashboard shows, since it polls these fields.
+  CHECK(null_backend(gateway.backend.get()) != nullptr);
+  null_backend(gateway.backend.get())->set_tone_hz(1000.0);
+  CHECK(gateway.wait_for(
+      [](const json& status) {
+        const json line = summary_of(status, "cameras");
+        return !line.is_null() &&
+               line.at("summary").at("arriving").get<unsigned>() == 2U;
+      },
+      4000));
+  result = run_self_test(client);
+  check = self_test_check(result, "party line cameras (Cameras)");
+  CHECK(!check.is_null());
+  CHECK(check.at("detail").get<std::string>().find(
+            "2 arriving (Camera 1, Camera 2)") != std::string::npos);
+  CHECK(check.at("detail").get<std::string>().find("nobody is talking") ==
+        std::string::npos);
+  CHECK(check.at("ok").get<bool>());
+
+  // ...and when it stops again, the members are reported silent within the bound.
+  null_backend(gateway.backend.get())->set_tone_hz(0.0);
+  CHECK(gateway.wait_for(
+      [](const json& status) {
+        const json line = summary_of(status, "cameras");
+        return !line.is_null() && line.at("quiet").get<bool>();
+      },
+      4000));
+  result = run_self_test(client);
+  check = self_test_check(result, "party line cameras (Cameras)");
+  CHECK(!check.is_null());
+  CHECK(check.at("detail").get<std::string>().find(
+            "2 silent (Camera 1, Camera 2)") != std::string::npos);
+  CHECK(check.at("ok").get<bool>());
+
+  gateway.stop();
+}
+
+TEST_CASE(rest_api_self_test_reports_a_line_nobody_can_talk_on) {
+  // Both members listen and neither has a talk channel bound: the line cannot
+  // carry a contribution at all, which is a different thing from a quiet line.
+  Gateway gateway(true, [](Config& config) {
+    config = party_line_config();
+    for (auto& member : config.party_lines[0].members) {
+      member.talk_channel = -1;
+    }
+  });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  const json result = run_self_test(client);
+  const json check = self_test_check(result, "party line cameras (Cameras)");
+  CHECK(!check.is_null());
+  CHECK(!check.at("ok").get<bool>());
+  CHECK(check.at("detail").get<std::string>().find("with no talk channel bound") !=
+        std::string::npos);
+  CHECK(check.at("detail").get<std::string>().find("no member can be heard") !=
+        std::string::npos);
+
+  const json line = summary_of(get_json(client, "/api/status"), "cameras");
+  CHECK(!line.is_null());
+  CHECK(!line.at("can_be_heard").get<bool>());
+  CHECK(!line.at("quiet").get<bool>());
+  CHECK_EQ(line.at("summary").at("unbound").get<unsigned>(), 2U);
+
+  gateway.stop();
+}
+
+TEST_CASE(rest_api_self_test_is_honest_when_it_cannot_judge_the_matrix) {
+  // The matrix mixes on the audio path and needs nothing of SIP: a dead audio path
+  // must not be reported as broken party lines, and an unavailable SIP engine must
+  // not stop the matrix from being judged.
+  Gateway gateway(true, [](Config& config) { config = party_line_config(); });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+  CHECK(!self_test_check(run_self_test(client), "party line cameras (Cameras)")
+             .is_null());
+
+  // Audio down: nothing is claimed about the lines at all, and the audio backend
+  // carries both the failure and what it costs the site.
+  gateway.router->stop();
+  const json result = run_self_test(client);
+  CHECK(self_test_check(result, "party line cameras (Cameras)").is_null());
+  CHECK(self_test_check(result, "party lines").is_null());
+  const json backend = self_test_check(result, "audio backend");
+  CHECK(!backend.is_null());
+  CHECK(!backend.at("ok").get<bool>());
+  CHECK(backend.at("detail").get<std::string>().find(
+            "the party lines are not being mixed while the audio path is down") !=
+        std::string::npos);
+  gateway.stop();
+
+  // SIP disabled: the matrix is judged on its own, with no false failure.
+  Gateway no_sip(true, [](Config& config) {
+    config = party_line_config();
+    config.sip.enabled = false;
+  });
+  CHECK(no_sip.start());
+  const json with_sip_down = run_self_test(client);
+  const json judged =
+      self_test_check(with_sip_down, "party line cameras (Cameras)");
+  CHECK(!judged.is_null());
+  CHECK(judged.at("ok").get<bool>());
+  CHECK(judged.at("detail").get<std::string>().find("2 arriving") !=
+        std::string::npos);
+  no_sip.stop();
 }
 
 TEST_CASE(rest_api_self_test_reports_checks) {

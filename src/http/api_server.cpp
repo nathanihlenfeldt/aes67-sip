@@ -173,10 +173,24 @@ json ApiServer::party_lines_status() const {
                              {"level_dbfs", member.level_dbfs},
                              {"arriving", member.arriving}});
     }
-    lines.push_back(json{{"id", line.id},
-                         {"name", line.name},
-                         {"claims_conference", line.claims_conference},
-                         {"members", members}});
+    // The summary is derived by the matrix, so the commissioning page, the
+    // dashboard and the self-test answer "who has gone silent" the same way.
+    const MatrixLineSummary& summary = line.summary;
+    lines.push_back(
+        json{{"id", line.id},
+             {"name", line.name},
+             {"claims_conference", line.claims_conference},
+             {"state", summary.state()},
+             {"can_be_heard", summary.can_be_heard()},
+             {"quiet", summary.quiet()},
+             {"summary", json{{"members", summary.members},
+                              {"arriving", summary.arriving},
+                              {"silent", summary.silent},
+                              {"unbound", summary.unbound},
+                              {"arriving_names", summary.arriving_names},
+                              {"silent_names", summary.silent_names},
+                              {"unbound_names", summary.unbound_names}}},
+             {"members", members}});
   }
   return lines;
 }
