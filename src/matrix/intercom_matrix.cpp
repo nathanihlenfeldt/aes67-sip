@@ -21,7 +21,9 @@ constexpr double kArrivalThresholdDbfs = -60.0;
 }  // namespace
 
 IntercomMatrix::IntercomMatrix(unsigned sample_rate)
-    : sample_rate_(sample_rate == 0 ? 48000 : sample_rate) {}
+    : sample_rate_(sample_rate == 0 ? 48000 : sample_rate),
+      conference_incoming_block_(kMaxConferenceBlockFrames, 0.0F),
+      conference_outgoing_block_(kMaxConferenceBlockFrames, 0.0F) {}
 
 IntercomMatrix::~IntercomMatrix() = default;
 
@@ -46,6 +48,7 @@ bool IntercomMatrix::plan_from_config(const Config& config, MatrixPlan* plan,
     MatrixLinePlan planned;
     planned.id = line.id;
     planned.name = line.name.empty() ? line.id : line.name;
+    planned.claims_conference = line.claims_conference;
     for (const auto& member : line.members) {
       MatrixMemberPlan planned_member;
       planned_member.endpoint_id = member.endpoint;
@@ -90,6 +93,7 @@ bool IntercomMatrix::configure(const MatrixPlan& plan, std::string* error) {
     RuntimeLine resolved_line;
     resolved_line.id = line.id;
     resolved_line.name = line.name;
+    resolved_line.claims_conference = line.claims_conference;
     resolved_line.members.reserve(line.members.size());
     for (const auto& member : line.members) {
       const MatrixEndpointPlan* endpoint = nullptr;
@@ -191,6 +195,10 @@ bool IntercomMatrix::configure(const MatrixPlan& plan, std::string* error) {
 void IntercomMatrix::clear() {
   std::lock_guard<std::mutex> lock(runtime_mutex_);
   runtime_.reset();
+  // Drop whatever the conference's leg had queued: it belongs to the routing
+  // that has just been replaced.
+  conference_incoming_.reset();
+  conference_outgoing_.reset();
 }
 
 bool IntercomMatrix::empty() const {
@@ -224,9 +232,19 @@ void IntercomMatrix::process(const float* capture, float* playback,
     }
   }
 
+  // What the conference says, drained once per block: every listener on a line
+  // that claims it reads the same samples, and a leg that sent nothing leaves
+  // silence rather than whatever the buffer held.
+  const unsigned conference_frames = std::min(frames, kMaxConferenceBlockFrames);
+  const size_t conference_read = conference_incoming_.read(
+      conference_incoming_block_.data(), conference_frames);
+  std::fill(conference_incoming_block_.data() + conference_read,
+            conference_incoming_block_.data() + conference_frames, 0.0F);
+
   const double decay_db = kPeakDecayDbPerMs * 1000.0 * static_cast<double>(frames) /
                           static_cast<double>(sample_rate_);
 
+  bool conference_claimed = false;
   for (const auto& line : runtime->lines) {
     // The mixes: one per distinct listen channel this line feeds.
     for (const auto& listener : line.listeners) {
@@ -252,6 +270,21 @@ void IntercomMatrix::process(const float* capture, float* playback,
       }
     }
 
+    // A line that claims the conference: its members hear what arrived on the SIP
+    // leg.  A line that does not claim it is untouched by it.
+    if (line.claims_conference) {
+      conference_claimed = true;
+      for (const auto& listener : line.listeners) {
+        if (listener.playback_channel >= channels) {
+          continue;
+        }
+        for (unsigned frame = 0; frame < conference_frames; ++frame) {
+          playback[static_cast<size_t>(frame) * channels +
+                   listener.playback_channel] += conference_incoming_block_[frame];
+        }
+      }
+    }
+
     // The meters: per configured binding, so the status view can name the channel
     // that went quiet.
     for (const auto& member : line.members) {
@@ -268,6 +301,31 @@ void IntercomMatrix::process(const float* capture, float* playback,
           hold_peak(member.meter.value.load(), linear_to_dbfs(peak), decay_db));
     }
   }
+
+  // What the conference hears: the members of the lines that claim it, each at its
+  // contribution level.  Its own contribution is never in there — mix-minus
+  // applies to the conference like any other participant, so it cannot be echoed.
+  if (conference_claimed && conference_frames > 0) {
+    for (unsigned frame = 0; frame < conference_frames; ++frame) {
+      const size_t base = static_cast<size_t>(frame) * channels;
+      double sum = 0.0;
+      for (const auto& line : runtime->lines) {
+        if (!line.claims_conference) {
+          continue;
+        }
+        for (const auto& contributor : line.contributions) {
+          if (contributor.mute || contributor.capture_channel >= channels) {
+            continue;
+          }
+          sum += static_cast<double>(capture[base + contributor.capture_channel]) *
+                 contributor.gain;
+        }
+      }
+      conference_outgoing_block_[frame] = static_cast<float>(sum);
+    }
+    conference_outgoing_.write(conference_outgoing_block_.data(),
+                               conference_frames);
+  }
 }
 
 std::vector<MatrixLineStatus> IntercomMatrix::status() const {
@@ -280,6 +338,7 @@ std::vector<MatrixLineStatus> IntercomMatrix::status() const {
     MatrixLineStatus line_status;
     line_status.id = line.id;
     line_status.name = line.name;
+    line_status.claims_conference = line.claims_conference;
     for (const auto& member : line.members) {
       MatrixMemberStatus member_status;
       member_status.endpoint = member.endpoint_id;
@@ -294,6 +353,22 @@ std::vector<MatrixLineStatus> IntercomMatrix::status() const {
     result.push_back(std::move(line_status));
   }
   return result;
+}
+
+void IntercomMatrix::push_conference_audio(const float* source, size_t frames) {
+  if (source == nullptr || frames == 0) {
+    return;
+  }
+  conference_incoming_.write(source, frames);
+}
+
+size_t IntercomMatrix::pull_conference_audio(float* destination, size_t frames) {
+  if (destination == nullptr || frames == 0) {
+    return 0;
+  }
+  const size_t read = conference_outgoing_.read(destination, frames);
+  std::fill(destination + read, destination + frames, 0.0F);
+  return read;
 }
 
 }  // namespace aes67sip

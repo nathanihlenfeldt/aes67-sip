@@ -172,8 +172,10 @@ json ApiServer::party_lines_status() const {
                              {"level_dbfs", member.level_dbfs},
                              {"arriving", member.arriving}});
     }
-    lines.push_back(
-        json{{"id", line.id}, {"name", line.name}, {"members", members}});
+    lines.push_back(json{{"id", line.id},
+                         {"name", line.name},
+                         {"claims_conference", line.claims_conference},
+                         {"members", members}});
   }
   return lines;
 }

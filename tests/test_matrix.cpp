@@ -36,11 +36,13 @@ MatrixMemberPlan member(const std::string& endpoint_id, int talk, int listen,
   return plan;
 }
 
-MatrixLinePlan line(const std::string& id, std::vector<MatrixMemberPlan> members) {
+MatrixLinePlan line(const std::string& id, std::vector<MatrixMemberPlan> members,
+                    bool claims_conference = false) {
   MatrixLinePlan plan;
   plan.id = id;
   plan.name = id;
   plan.members = std::move(members);
+  plan.claims_conference = claims_conference;
   return plan;
 }
 
@@ -53,6 +55,19 @@ MatrixPlan two_endpoint_line() {
   plan.endpoints.push_back(endpoint("a", {0}, {0}));
   plan.endpoints.push_back(endpoint("b", {1}, {1}));
   plan.lines.push_back(line("pl1", {member("a", 0, 0), member("b", 0, 0)}));
+  return plan;
+}
+
+/**
+ * Two lines, one of which claims the conference, with a member on each:
+ * "a" on line 1 (capture 0 / playback 0), "b" on line 2 (capture 1 / playback 1).
+ */
+MatrixPlan conference_plan(bool line_one_claims, bool line_two_claims) {
+  MatrixPlan plan;
+  plan.endpoints.push_back(endpoint("a", {0}, {0}));
+  plan.endpoints.push_back(endpoint("b", {1}, {1}));
+  plan.lines.push_back(line("pl1", {member("a", 0, 0)}, line_one_claims));
+  plan.lines.push_back(line("pl2", {member("b", 0, 0)}, line_two_claims));
   return plan;
 }
 
@@ -174,6 +189,136 @@ TEST_CASE(matrix_without_lines_mixes_nothing) {
     CHECK_NEAR(playback[frame * 2 + 0], 0.25, 1e-6);
     CHECK_NEAR(playback[frame * 2 + 1], 0.25, 1e-6);
   }
+}
+
+TEST_CASE(matrix_feeds_the_conference_to_the_lines_that_claim_it) {
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(conference_plan(true, false), &error));
+
+  // The conference says something and the site is silent.
+  std::vector<float> conference(kFrames, 0.25F);
+  matrix.push_conference_audio(conference.data(), conference.size());
+
+  std::vector<float> capture(kChannels * kFrames, 0.0F);
+  std::vector<float> playback(kChannels * kFrames, 0.0F);
+  matrix.process(capture.data(), playback.data(), kChannels, kFrames);
+
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback[frame * kChannels + 0], 0.25, 1e-4);  // line 1 claims it
+    CHECK_NEAR(playback[frame * kChannels + 1], 0.0, 1e-6);   // line 2 does not
+  }
+}
+
+TEST_CASE(matrix_sends_the_members_of_claiming_lines_to_the_conference) {
+  // "a" sits on the claiming line and talks at -6 dB; "b" sits on a line that does
+  // not claim the conference, so only "a" may reach it.
+  MatrixPlan plan;
+  plan.endpoints.push_back(endpoint("a", {0}, {0}));
+  plan.endpoints.push_back(endpoint("b", {1}, {1}));
+  plan.lines.push_back(line("pl1", {member("a", 0, 0, -6.0206)}, true));
+  plan.lines.push_back(line("pl2", {member("b", 0, 0)}, false));
+
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(plan, &error));
+
+  std::vector<float> capture(2 * kFrames, 0.0F);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    capture[frame * 2 + 0] = 0.5F;  // "a"
+    capture[frame * 2 + 1] = 0.5F;  // "b", which the conference must not hear
+  }
+  std::vector<float> playback(2 * kFrames, 0.0F);
+  matrix.process(capture.data(), playback.data(), 2, kFrames);
+
+  std::vector<float> to_conference(kFrames, 40.0F);
+  CHECK_EQ(matrix.pull_conference_audio(to_conference.data(), to_conference.size()),
+           static_cast<size_t>(kFrames));
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(to_conference[frame], 0.25, 1e-3);  // "a" at its level, and no "b"
+  }
+}
+
+TEST_CASE(matrix_never_echoes_the_conference_to_itself) {
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(conference_plan(true, false), &error));
+
+  // The conference talks and "a" talks: the conference hears only the site.
+  std::vector<float> conference(kFrames, 0.5F);
+  matrix.push_conference_audio(conference.data(), conference.size());
+  std::vector<float> capture(2 * kFrames, 0.0F);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    capture[frame * 2 + 0] = 0.5F;  // "a"
+  }
+  std::vector<float> playback(2 * kFrames, 0.0F);
+  matrix.process(capture.data(), playback.data(), 2, kFrames);
+
+  std::vector<float> to_conference(kFrames, 40.0F);
+  matrix.pull_conference_audio(to_conference.data(), to_conference.size());
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(to_conference[frame], 0.5, 1e-4);  // "a" only, never its own 0.5
+  }
+}
+
+TEST_CASE(matrix_ignores_the_conference_when_no_line_claims_it) {
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(conference_plan(false, false), &error));
+
+  std::vector<float> conference(kFrames, 0.5F);
+  matrix.push_conference_audio(conference.data(), conference.size());
+  std::vector<float> capture(2 * kFrames, 0.0F);
+  std::vector<float> playback(2 * kFrames, 1.0F);  // stale audio everywhere
+  matrix.process(capture.data(), playback.data(), 2, kFrames);
+
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback[frame * 2 + 0], 0.0, 1e-6);  // nobody hears the conference
+    CHECK_NEAR(playback[frame * 2 + 1], 0.0, 1e-6);
+  }
+
+  // Nothing is sent to the conference either: its leg reads silence.
+  std::vector<float> to_conference(kFrames, 40.0F);
+  CHECK_EQ(matrix.pull_conference_audio(to_conference.data(), to_conference.size()),
+           0U);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(to_conference[frame], 0.0, 1e-6);
+  }
+}
+
+TEST_CASE(matrix_mixes_the_conference_up_to_one_block_capacity) {
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(conference_plan(true, false), &error));
+
+  // A block larger than the conference side's scratch is mixed up to that capacity
+  // and no further: the bound is deliberate, and the rest stays queued rather than
+  // being dropped.
+  constexpr unsigned kBig = 5000;
+  std::vector<float> conference(kBig, 0.25F);
+  matrix.push_conference_audio(conference.data(), conference.size());
+
+  std::vector<float> capture(2 * kBig, 0.0F);
+  std::vector<float> playback(2 * kBig, 0.0F);
+  matrix.process(capture.data(), playback.data(), 2, kBig);
+
+  for (unsigned frame = 0; frame < 4096; ++frame) {
+    CHECK_NEAR(playback[frame * 2 + 0], 0.25, 1e-4);
+  }
+  for (unsigned frame = 4096; frame < kBig; ++frame) {
+    CHECK_NEAR(playback[frame * 2 + 0], 0.0, 1e-6);
+  }
+}
+
+TEST_CASE(matrix_status_reports_which_lines_claim_the_conference) {
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(conference_plan(true, false), &error));
+
+  const auto status = matrix.status();
+  CHECK_EQ(status.size(), 2U);
+  CHECK_EQ(status[0].claims_conference, true);
+  CHECK_EQ(status[1].claims_conference, false);
 }
 
 TEST_CASE(matrix_binds_each_channel_pair_independently) {

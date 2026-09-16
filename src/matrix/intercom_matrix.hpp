@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "audio/ring.hpp"
 #include "config.hpp"
 
 namespace aes67sip {
@@ -22,6 +23,8 @@ struct MatrixMemberPlan {
 struct MatrixLinePlan {
   std::string id;
   std::string name;
+  /** Whether this line claims the conference (see `PartyLineConfig`). */
+  bool claims_conference{false};
   std::vector<MatrixMemberPlan> members;
 };
 
@@ -59,6 +62,8 @@ struct MatrixMemberStatus {
 struct MatrixLineStatus {
   std::string id;
   std::string name;
+  /** True when this line's members are on the off-site conference call. */
+  bool claims_conference{false};
   std::vector<MatrixMemberStatus> members;
 };
 
@@ -108,6 +113,20 @@ class IntercomMatrix {
 
   /** Membership and levels, in configuration order. */
   std::vector<MatrixLineStatus> status() const;
+
+  /**
+   * Queues what the conference says: the audio arriving on the SIP leg.  The
+   * matrix knows nothing about SIP — it only knows that one participant, the
+   * conference, has an incoming side that somebody else feeds.
+   */
+  void push_conference_audio(const float* source, size_t frames);
+
+  /**
+   * Fills what the conference hears: the sum of the members of the lines that
+   * claim it, each at its contribution level.  Writes what it can and pads with
+   * silence, like a member's mix.
+   */
+  size_t pull_conference_audio(float* destination, size_t frames);
 
  private:
   /**
@@ -167,6 +186,7 @@ class IntercomMatrix {
   struct RuntimeLine {
     std::string id;
     std::string name;
+    bool claims_conference{false};
     std::vector<RuntimeMember> members;  // as configured, for the status view
     std::vector<Contribution> contributions;
     std::vector<Listener> listeners;
@@ -179,9 +199,23 @@ class IntercomMatrix {
 
   std::shared_ptr<const Runtime> current_runtime() const;
 
+  /**
+   * The largest block the conference side mixes in one go.  The scratch buffers
+   * are sized once, in the constructor, so the audio thread never allocates; a
+   * block larger than this is simply mixed up to the capacity (periods are 48
+   * frames in practice, so this is a bound, not a limit anyone meets).
+   */
+  static constexpr unsigned kMaxConferenceBlockFrames = 4096;
+
   unsigned sample_rate_{48000};
   mutable std::mutex runtime_mutex_;
   std::shared_ptr<const Runtime> runtime_;
+
+  /** What the conference says, and what it hears; filled and drained by its leg. */
+  SpscRing conference_incoming_{8192};
+  SpscRing conference_outgoing_{8192};
+  std::vector<float> conference_incoming_block_;
+  std::vector<float> conference_outgoing_block_;
 };
 
 }  // namespace aes67sip

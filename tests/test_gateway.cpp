@@ -214,6 +214,9 @@ TEST_CASE(rest_api_reports_party_lines_and_their_members) {
   CHECK_EQ(line.at("id").get<std::string>(), std::string("cameras"));
   CHECK_EQ(line.at("name").get<std::string>(), std::string("Cameras"));
   CHECK_EQ(line.at("members").size(), 2U);
+  // This fixture claims no conference, so the field is reported and stays false: a
+  // gateway serving only SIP lines behaves exactly as it always has.
+  CHECK_EQ(line.at("claims_conference").get<bool>(), false);
 
   const json first = member_status(status, 0, 0);
   CHECK_EQ(first.at("endpoint").get<std::string>(), std::string("a"));

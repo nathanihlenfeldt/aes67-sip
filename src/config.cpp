@@ -114,13 +114,17 @@ json party_line_to_json(const PartyLineConfig& line) {
   for (const auto& member : line.members) {
     members.push_back(party_line_member_to_json(member));
   }
-  return json{{"id", line.id}, {"name", line.name}, {"members", members}};
+  return json{{"id", line.id},
+              {"name", line.name},
+              {"claims_conference", line.claims_conference},
+              {"members", members}};
 }
 
 PartyLineConfig party_line_from_json(const json& document) {
   PartyLineConfig line;
   line.id = json_get<std::string>(document, "id", "");
   line.name = json_get<std::string>(document, "name", "");
+  line.claims_conference = json_get<bool>(document, "claims_conference", false);
   if (json_has(document, "members")) {
     for (const auto& entry : document.at("members")) {
       line.members.push_back(party_line_member_from_json(entry));

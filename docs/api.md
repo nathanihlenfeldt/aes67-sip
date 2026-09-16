@@ -99,12 +99,14 @@ Levels are dBFS floats; silence is serialised as `null`.
 for each member the endpoint that owns it, the endpoint's own channel indices it
 bound (`talk_channel` / `listen_channel`, each `-1` where that direction is
 unbound), that member's contribution level, the held level of its audio and whether
-that audio is currently arriving. It is an empty array when no party lines are
-declared, which is also how a gateway that only bridges SIP lines reports itself.
+that audio is currently arriving. `claims_conference` says whether that line's
+members are on the off-site call, so the choice is visible without reading the
+configuration. It is an empty array when no party lines are declared, which is also
+how a gateway that only bridges SIP lines reports itself.
 
 ```json
 "party_lines": [
-  { "id": "cameras", "name": "Cameras",
+  { "id": "cameras", "name": "Cameras", "claims_conference": true,
     "members": [
       { "endpoint": "a", "name": "Camera 1", "talk_channel": 0, "listen_channel": 0,
         "contribution_db": 0.0, "level_dbfs": -6.0, "arriving": true },

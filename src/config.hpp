@@ -181,6 +181,12 @@ struct PartyLineMemberConfig {
 struct PartyLineConfig {
   std::string id;
   std::string name;  // defaults to the id
+  /**
+   * Whether this line claims the conference: its members then hear what arrives
+   * on the SIP leg, and the conference hears them.  Per line, so one department,
+   * several or all of them can be on the off-site call.
+   */
+  bool claims_conference{false};
   std::vector<PartyLineMemberConfig> members;
 };
 
