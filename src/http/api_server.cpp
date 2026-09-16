@@ -383,6 +383,45 @@ void ApiServer::register_routes() {
     reply_json(response, status.value("levels", json::object()));
   });
 
+  // The conference leg is a call like a line, but it is not one of `lines[]`: it
+  // has its own block in the configuration and its own view in the status, so it
+  // gets its own two routes rather than a reserved id in the line paths.
+  svr->Post("/api/conference/config",
+            [this](const httplib::Request& request, httplib::Response& response) {
+              std::string error;
+              const json patch = parse_body(request, &error);
+              if (patch.is_null()) {
+                reply_error(response, 400, error);
+                return;
+              }
+              if (!lines_->update_conference(patch, &error)) {
+                reply_error(response, 400, error);
+                return;
+              }
+              reply_json(response, lines_->conference_status());
+            });
+
+  svr->Post("/api/conference/call", [this](const httplib::Request& request,
+                                           httplib::Response& response) {
+    std::string error;
+    const json body = parse_body(request, &error);
+    if (body.is_null()) {
+      reply_error(response, 400, error);
+      return;
+    }
+    const std::string action = json_get<std::string>(body, "action", "");
+    if (action.empty()) {
+      reply_error(response, 400, "missing 'action'");
+      return;
+    }
+    if (!lines_->conference_action(action, &error)) {
+      reply_error(response, 400, error);
+      return;
+    }
+    reply_json(response,
+               json{{"ok", true}, {"conference", lines_->conference_status()}});
+  });
+
   svr->Get("/api/log", [](const httplib::Request& request,
                           httplib::Response& response) {
     size_t count = 200;

@@ -120,7 +120,11 @@ intercom use case:
   conference says is mixed into every party line that claims it (`party_lines[].claims_conference`)
   and what it hears is those lines' members summed at their contribution levels. Disabled
   by default; `target` must be set when it is enabled, and `GET /api/status` reports the
-  leg's call state and levels under `conference`.
+  leg's call state and levels under `conference`. It is set up and controlled in the UI, on
+  the **Lines** page: enable it, pick the account, type the target to dial, then *dial
+  now* or *hang up* - a hang up also holds the leg down, so the appliance does not raise the
+  call again five seconds later (`status.conference.redial_paused` says which of the two idle
+  states it is in).
 - Lines ship **disabled** in the sample configuration: enable the ones the site runs
   (`"enabled": true`), give each its own `sip.extension`, and give each a `sip.dial_target`,
   because every enabled line registers its own `sip.extension` through its account and a
@@ -157,7 +161,11 @@ intercom use case:
    - **Dashboard** - PTP, daemon reachability, SIP registrations, per-line state/levels,
      the conference leg when one is configured, and each party line with who is arriving
      and who has gone silent
-   - **Lines** - channel mapping, gain/mute, call controls, DTMF, commissioning test tone
+   - **Lines** - channel mapping, gain/mute, call controls, DTMF, commissioning test tone,
+     and the conference card (enable the off-site leg, its account and target, dial now,
+     hang up),
+     and the conference leg: enable it, pick its account and the conference to dial, save,
+     dial it now or hang it up
    - **Party lines** - the commissioning view and editor: each line with its members,
      their contribution levels and live levels, and membership, levels and per-channel
      bindings edited here rather than in JSON

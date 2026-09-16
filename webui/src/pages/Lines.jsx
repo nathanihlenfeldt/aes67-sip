@@ -6,11 +6,25 @@
 //  call controls and a DTMF pad.
 //
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useGlobalStatus } from '../StatusContext';
-import { getLineConfig, setLineConfig, lineCall, lineTone } from '../api';
+import {
+  conferenceCall,
+  getConfig,
+  getLineConfig,
+  lineCall,
+  lineTone,
+  setConferenceConfig,
+  setLineConfig,
+} from '../api';
 import { arr, fmtDb, fmtDuration, num } from '../format';
+import {
+  conferenceDirty,
+  conferenceDraft,
+  conferenceNote,
+  conferencePatch,
+} from '../conference';
 import Card from '../components/Card';
 import StatusPill from '../components/StatusPill';
 import LevelMeter from '../components/LevelMeter';
@@ -406,6 +420,196 @@ function LineEditor({ line, config, onSave, onCall, onTone, onReload, busy }) {
   );
 }
 
+/**
+ * The off-site conference: the one call that is not a line.  It has no AES67 side
+ * (its audio is the party lines that claim it), so this card sets up the account
+ * and the target to dial, and offers the two controls the automatic retry cannot
+ * give: raise the call now, and hang it up without it coming back five seconds
+ * later.  Which party lines hear it is the `conference` tick on the Party lines
+ * page - a membership, not a property of the leg.
+ */
+function ConferenceCard({ status }) {
+  const [config, setConfig] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+
+  const live = status || {};
+  const stored = config?.conference;
+  const accounts = arr(config?.accounts);
+  const dirty = draft !== null && conferenceDirty(draft, stored);
+  const up =
+    !!live.enabled &&
+    (live.state === 'in_call' || live.state === 'ringing' || live.state === 'dialing');
+
+  useEffect(() => {
+    let alive = true;
+    getConfig()
+      .then((cfg) => {
+        if (!alive) return;
+        setConfig(cfg || {});
+        setDraft(conferenceDraft(cfg?.conference));
+      })
+      .catch((err) => {
+        if (alive) setError(err.message);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const set = (patch) => setDraft((current) => ({ ...current, ...patch }));
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await setConferenceConfig(conferencePatch(draft));
+      const cfg = await getConfig();
+      setConfig(cfg || {});
+      setDraft(conferenceDraft(cfg?.conference));
+      setNotice('saved and applied - the configuration file is what a rebuild restores');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function act(action) {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await conferenceCall(action);
+      setNotice(
+        action === 'dial'
+          ? 'dialling now'
+          : 'call ended - the automatic retry is paused until you dial again',
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card
+      title="Conference"
+      subtitle="the off-site call: one leg, raised by the appliance and kept up"
+    >
+      <div className="field-row align-center">
+        <StatusPill
+          state={live.enabled ? live.state : 'disabled'}
+          title={conferenceNote(live)}
+        />
+        <span className="muted small">{conferenceNote(live)}</span>
+      </div>
+
+      {draft === null ? (
+        <div className="empty">{error || 'loading the configuration…'}</div>
+      ) : (
+        <>
+          <div className="field-row">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={!!draft.enabled}
+                onChange={(e) => set({ enabled: e.target.checked })}
+              />
+              off-site leg enabled
+            </label>
+          </div>
+
+          <div className="field-row">
+            <label className="field">
+              <span className="field-label">account</span>
+              <select
+                className="input mono"
+                value={draft.account}
+                onChange={(e) => set({ account: e.target.value })}
+              >
+                <option value="">(none)</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.id}
+                  </option>
+                ))}
+                {draft.account && !accounts.some((account) => account.id === draft.account) ? (
+                  // The block names an account the list does not have (it was
+                  // removed, or the file was hand-edited): show what is stored
+                  // rather than silently showing the first account instead.
+                  <option value={draft.account}>{draft.account} (not in the accounts list)</option>
+                ) : null}
+              </select>
+            </label>
+            <label className="field">
+              <span className="field-label">target to dial (conference.target)</span>
+              <input
+                className="input mono"
+                placeholder="sip:300@10.0.0.5"
+                value={draft.target}
+                onChange={(e) => set({ target: e.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">name shown for it</span>
+              <input
+                className="input"
+                value={draft.display_name}
+                onChange={(e) => set({ display_name: e.target.value })}
+              />
+            </label>
+          </div>
+        </>
+      )}
+
+      {/* The controls stay reachable whatever the configuration read did: they
+          drive the leg through its own route, not through the file. */}
+      <div className="field-row align-center">
+        <button
+          type="button"
+          className="btn"
+          disabled={busy || draft === null || !dirty}
+          onClick={save}
+        >
+          {busy ? 'working…' : dirty ? 'save and apply' : 'saved'}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy || !live.enabled}
+          title="raise the call now instead of waiting for the next retry"
+          onClick={() => act('dial')}
+        >
+          dial now
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy || !up}
+          title="hang up and leave it down: the automatic retry waits for dial now"
+          onClick={() => act('hangup')}
+        >
+          hang up
+        </button>
+      </div>
+
+      <div className="hint">
+        Whether a party line hears the call is the <em>conference</em> tick on the Party lines
+        page. Saving applies the conference block only - the site&apos;s lines are untouched - but
+        a conference call that is up is dropped and raised again, so edit it while nothing is on
+        air.
+      </div>
+      {error && draft !== null ? <div className="inline-error">not applied: {error}</div> : null}
+      {notice ? <div className="hint">{notice}</div> : null}
+    </Card>
+  );
+}
+
 export default function Lines() {
   const { status, error: statusError } = useGlobalStatus();
   const [openId, setOpenId] = useState(null);
@@ -500,6 +704,8 @@ export default function Lines() {
         </div>
       ) : null}
       {statusError && !status ? <div className="empty">No status from the gateway.</div> : null}
+      <ConferenceCard status={status?.conference} />
+
       <Card bodyClass="flush">
         {lines.length === 0 ? (
           <div className="empty">No lines reported by the gateway.</div>

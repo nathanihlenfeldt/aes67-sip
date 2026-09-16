@@ -74,6 +74,9 @@ LineManager::LineManager(Config* config, std::string config_path,
       router_(router),
       engine_(engine) {
   std::lock_guard<std::mutex> lock(mutex_);
+  // The block as loaded, so the first apply compares against what the file said
+  // rather than against a default nobody configured.
+  applied_conference_ = config_->conference;
   for (const auto& line : config_->lines) {
     auto runtime = std::make_shared<LineRuntime>();
     runtime->config = line;
@@ -404,6 +407,18 @@ void LineManager::apply_conference() {
     if (it != lines_.end()) {
       existing = it->second;
     }
+    // A block that would raise a different call is what an operator means by
+    // "try it again", so a hang up by hand no longer holds it down.  It is done
+    // here rather than in the caller so every route that changes the block -
+    // `POST /api/conference/config` and the Settings editor's `POST /api/config`
+    // alike - clears the hold the same way.  A rename alone does not.
+    const bool different_call = conference.enabled != applied_conference_.enabled ||
+                                conference.account != applied_conference_.account ||
+                                conference.target != applied_conference_.target;
+    if (different_call) {
+      conference_held_ = false;
+    }
+    applied_conference_ = conference;
   }
 
   if (!conference.enabled) {
@@ -719,9 +734,16 @@ void LineManager::supervise() {
           line.ptt_hangup_at_ms = 0;
         }
       } else if (mode == "dial_out" || mode == "permanent") {
-        // Keep a call up permanently, retrying every 5 s after a failure.
+        // Keep a call up permanently, retrying every 5 s after a failure.  The
+        // conference leg is the exception: an operator who hung it up by hand asked
+        // for no call, so it is not raised again until they dial it.
+        bool held = false;
+        if (line_id == kConferenceLineId) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          held = conference_held_;
+        }
         const bool idle = state == LineState::kIdle || state == LineState::kError;
-        if (idle && dial_target.size() > 0 && now - last_dial_ms > 5000) {
+        if (!held && idle && dial_target.size() > 0 && now - last_dial_ms > 5000) {
           {
             std::lock_guard<std::mutex> lock(line.mutex);
             line.last_dial_ms = now;
@@ -911,8 +933,10 @@ json LineManager::conference_status() const {
   LineState state = conference.enabled ? LineState::kIdle : LineState::kDisabled;
   int state_code = 0;
   std::string detail;
+  bool redial_paused = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    redial_paused = conference_held_;
     const auto it = lines_.find(kConferenceLineId);
     if (it != lines_.end()) {
       state = it->second->state;
@@ -937,6 +961,10 @@ json LineManager::conference_status() const {
               {"state", to_string(state)},
               {"state_code", state_code},
               {"detail", detail},
+              // True while the leg was hung up by hand: the state is idle and no
+              // retry is coming, which an operator has to be able to tell apart
+              // from a leg waiting for its next attempt.
+              {"redial_paused", redial_paused},
               {"levels",
                json{{"to_conference_dbfs", dbfs_to_json(levels.capture_dbfs)},
                     {"from_conference_dbfs", dbfs_to_json(levels.to_aes67_dbfs)}}}};
@@ -1049,6 +1077,139 @@ bool LineManager::update_line(int line_id, const json& patch, std::string* error
   configure_daemon_streams(merged);
   LOG_INFO("line ", line_id, " (", merged.name, ") updated");
   return true;
+}
+
+bool LineManager::update_conference(const json& patch, std::string* error) {
+  // The block's own keys, in one place: what the allow-list accepts and what the
+  // refusal tells the caller must not be able to drift apart.
+  static const char* const kKeys[] = {"enabled", "account", "target",
+                                      "display_name"};
+  if (!patch.is_object()) {
+    if (error != nullptr) {
+      *error = "the conference update must be a JSON object";
+    }
+    return false;
+  }
+  // A key the block does not have is a refusal, not a typo nothing reads.
+  for (auto it = patch.begin(); it != patch.end(); ++it) {
+    const std::string& key = it.key();
+    bool known = false;
+    for (const char* candidate : kKeys) {
+      if (key == candidate) {
+        known = true;
+        break;
+      }
+    }
+    if (known) {
+      continue;
+    }
+    if (error != nullptr) {
+      std::string expected;
+      for (const char* candidate : kKeys) {
+        if (!expected.empty()) {
+          expected += ", ";
+        }
+        expected += candidate;
+      }
+      *error = "unknown conference key '" + key + "' (expected " + expected + ")";
+    }
+    return false;
+  }
+
+  Config candidate = *config_;
+  candidate.conference.enabled =
+      json_get<bool>(patch, "enabled", candidate.conference.enabled);
+  candidate.conference.account =
+      json_get<std::string>(patch, "account", candidate.conference.account);
+  candidate.conference.target =
+      json_get<std::string>(patch, "target", candidate.conference.target);
+  candidate.conference.display_name = json_get<std::string>(
+      patch, "display_name", candidate.conference.display_name);
+
+  // The same discipline as POST /api/config: the candidate is validated as a whole
+  // before the file or the running appliance is touched, so a conference that
+  // could not work is refused with nothing half-applied.
+  if (!validate_configuration(candidate, nullptr, error)) {
+    return false;
+  }
+  if (!candidate.save(config_path_, error)) {
+    return false;
+  }
+  *config_ = candidate;
+  // `apply_conference` clears a hang up by hand when the change would raise a
+  // different call, so both routes that can change the block behave the same way.
+  apply_conference();
+  return true;
+}
+
+bool LineManager::conference_action(const std::string& action, std::string* error) {
+  const std::string verb = to_lower(action);
+  if (verb != "dial" && verb != "hangup") {
+    if (error != nullptr) {
+      *error =
+          "unknown conference action '" + action + "' (expected dial or hangup)";
+    }
+    return false;
+  }
+  const ConferenceConfig conference = config_->conference;
+  if (!conference.enabled) {
+    if (error != nullptr) {
+      *error = "no conference leg is configured (conference.enabled is false)";
+    }
+    return false;
+  }
+  if (engine_ == nullptr) {
+    if (error != nullptr) {
+      *error = "the SIP engine is not available";
+    }
+    return false;
+  }
+
+  if (verb == "hangup") {
+    LineState state = LineState::kIdle;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      conference_held_ = true;
+      const auto it = lines_.find(kConferenceLineId);
+      if (it != lines_.end()) {
+        state = it->second->state;
+      }
+    }
+    const bool up = state == LineState::kDialing || state == LineState::kRinging ||
+                    state == LineState::kInCall;
+    if (!up) {
+      // The operator asked for no call, and there is none: nothing to end, and no
+      // error either.  The hold set above still stands - "hang up" on an idle leg
+      // means "stay down", which is the reading the button's own tooltip gives.
+      return true;
+    }
+    return engine_->hangup(kConferenceLineId, error);
+  }
+
+  if (trim(conference.target).empty()) {
+    // A guard rather than a path the tests reach: every write path validates the
+    // leg before anything runs, so an enabled conference with no target is not
+    // expected as the running state.  It keeps a dial from being sent to nothing
+    // if one ever is.
+    if (error != nullptr) {
+      *error = "the conference leg has no target to dial (conference.target)";
+    }
+    return false;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    conference_held_ = false;
+    const auto it = lines_.find(kConferenceLineId);
+    if (it != lines_.end()) {
+      // Let the supervisor's five second retry count from this dial rather than
+      // raising a second call behind it.  This is the one place `mutex_` and a
+      // line's own mutex are held together, and in this order: no path takes a
+      // line's mutex first, so keep it that way.
+      std::lock_guard<std::mutex> line_lock(it->second->mutex);
+      it->second->last_dial_ms = now_ms();
+    }
+  }
+  return engine_->dial(kConferenceLineId, conference.target, error);
 }
 
 bool LineManager::test_tone(int line_id, const std::string& action,

@@ -1,8 +1,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <thread>
 
 #include <httplib.h>
@@ -106,6 +108,10 @@ struct Gateway {
   }
 
   bool start() {
+    // A test must not inherit the configuration file a previous run left behind:
+    // `restart_from_file` reads this path, and a run killed mid-save leaves a
+    // partial document that turns the next run's assertions into nonsense.
+    std::remove(config_path_.c_str());
     if (!live_ports().insert(config.http_port).second) {
       error =
           "port " + std::to_string(config.http_port) +
@@ -175,6 +181,22 @@ struct Gateway {
   }
 };
 
+/**
+ * Starts the gateway, or ends the test where it stands.
+ *
+ * A gateway that cannot come up - most often because another process holds the
+ * test port - leaves every later assertion meaningless: the requests are answered
+ * by whoever holds the port, or by nobody, so the failures that follow name the
+ * wrong cause.  Throwing turns that into one failure carrying the reason (the
+ * framework reports an unexpected exception), instead of a cascade nobody can read.
+ */
+void gateway_up(Gateway& gateway) {
+  if (gateway.start()) {
+    return;
+  }
+  throw std::runtime_error("the gateway did not start: " + gateway.error);
+}
+
 json get_json(httplib::Client& client, const std::string& path,
               int* status = nullptr) {
   const auto response = client.Get(path);
@@ -239,7 +261,7 @@ json member_status(const json& status, size_t line_index, size_t member_index) {
 
 TEST_CASE(rest_api_reports_party_lines_and_their_members) {
   Gateway gateway(true, [](Config& config) { config = party_line_config(); });
-  CHECK(gateway.start());
+  gateway_up(gateway);
 
   // The mixes are fed from the audio thread, and the simulated device carries a
   // tone on every channel, so both members must report as arriving.  This walks
@@ -279,7 +301,7 @@ TEST_CASE(rest_api_reports_party_lines_and_their_members) {
 
 TEST_CASE(rest_api_reports_no_party_lines_when_none_are_configured) {
   Gateway gateway;
-  CHECK(gateway.start());
+  gateway_up(gateway);
 
   httplib::Client client("127.0.0.1", kTestPort);
   const json status = get_json(client, "/api/status");
@@ -348,7 +370,7 @@ TEST_CASE(line_manager_dials_and_hangs_up_through_the_stub_engine) {
 TEST_CASE(rest_api_serves_status_and_controls_lines) {
   Gateway gateway;
   std::string error;
-  CHECK(gateway.start());
+  gateway_up(gateway);
 
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
@@ -522,7 +544,7 @@ json stream_named(const std::vector<json>& streams, const std::string& name) {
 
 TEST_CASE(rest_api_provisions_one_stream_per_endpoint_direction) {
   Gateway gateway(true, [](Config& config) { scale_matrix(&config); });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -603,7 +625,7 @@ TEST_CASE(gateway_refuses_a_configuration_wider_than_the_device) {
 
 TEST_CASE(gateway_mixes_the_reference_scale_in_a_single_run) {
   Gateway gateway(true, [](Config& config) { scale_matrix(&config); });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -664,7 +686,7 @@ TEST_CASE(rest_api_refuses_a_configuration_that_could_not_work) {
   gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
     return gateway.restart_from_file(restart_error);
   });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -819,7 +841,7 @@ TEST_CASE(rest_api_refuses_an_edit_it_cannot_persist) {
   gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
     return gateway.restart_from_file(restart_error);
   });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -932,6 +954,24 @@ bool conference_reports(const json& status, const std::string& state) {
   return json_get_path<std::string>(status, {"conference", "state"}, "") == state;
 }
 
+/**
+ * The configuration file the gateway writes, read back as the file on disk.  A
+ * test that claims "the file is what a rebuild restores" has to read the file:
+ * `GET /api/config` answers from the running configuration, which a save that
+ * wrote nothing would leave looking correct.
+ */
+json saved_config_file(const std::string& path) {
+  std::ifstream in(path);
+  if (!in) {
+    return nullptr;
+  }
+  try {
+    return json::parse(in);
+  } catch (const json::exception&) {
+    return nullptr;
+  }
+}
+
 }  // namespace
 
 TEST_CASE(conference_leg_carries_only_the_lines_that_claim_it) {
@@ -939,7 +979,7 @@ TEST_CASE(conference_leg_carries_only_the_lines_that_claim_it) {
   // the matrix put there - here, the conference's own audio.
   Gateway gateway(true,
                   [](Config& config) { config = conference_config(true, 0.0); });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -976,7 +1016,7 @@ TEST_CASE(conference_leg_sends_the_claiming_lines_mix) {
   // The device carries a tone on every capture channel, so every member is
   // talking: the conference hears the sum of the claiming line's members.
   Gateway gateway(true, [](Config& config) { config = conference_config(true); });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   CHECK(gateway.wait_for(conference_in_call, 8000));
 
   // Pull from the leg the way its media thread does, until the mix comes through
@@ -998,7 +1038,7 @@ TEST_CASE(conference_leg_sends_the_claiming_lines_mix) {
 
   // A site whose lines do not claim the conference sends it nothing at all.
   Gateway quiet(true, [](Config& config) { config = conference_config(false); });
-  CHECK(quiet.start());
+  gateway_up(quiet);
   CHECK(quiet.wait_for(conference_in_call, 8000));
   bool leaked = false;
   for (int attempt = 0; attempt < 60 && !leaked; ++attempt) {
@@ -1018,7 +1058,7 @@ TEST_CASE(conference_leg_sends_the_claiming_lines_mix) {
 
 TEST_CASE(conference_leg_that_cannot_be_established_is_reported) {
   Gateway gateway(true, [](Config& config) { config = conference_config(true); });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
   CHECK(gateway.wait_for(conference_in_call, 8000));
@@ -1075,7 +1115,7 @@ TEST_CASE(rest_api_reports_a_conference_leg_that_is_not_configured) {
   // The default fixture has no conference block: the status says so, the leg is
   // not a line, and the self-test does not judge it.
   Gateway gateway;
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -1104,7 +1144,7 @@ TEST_CASE(rest_api_reports_a_conference_leg_that_is_not_configured) {
 
 TEST_CASE(rest_api_refuses_a_conference_leg_that_could_not_be_dialled) {
   Gateway gateway(true, [](Config& config) { config = party_line_config(); });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -1142,7 +1182,7 @@ TEST_CASE(conference_leg_survives_a_configuration_edit) {
   gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
     return gateway.restart_from_file(restart_error);
   });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
   CHECK(gateway.wait_for(conference_in_call, 8000));
@@ -1190,7 +1230,7 @@ TEST_CASE(conference_leg_can_be_switched_off) {
   gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
     return gateway.restart_from_file(restart_error);
   });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
   CHECK(gateway.wait_for(conference_in_call, 8000));
@@ -1224,6 +1264,206 @@ TEST_CASE(conference_leg_can_be_switched_off) {
   gateway.stop();
 }
 
+TEST_CASE(conference_is_set_up_from_the_api_like_a_line) {
+  // A site with no off-site leg: the fields the form has are enough to put one up,
+  // and the file is what a rebuild restores - so the file is read back, not only
+  // the running configuration.  Its own config path, so what another test wrote
+  // cannot be mistaken for what this one did.
+  const std::string path = "aes67-sip-conference-setup-test.conf";
+  Gateway gateway(
+      true,
+      [](Config& config) {
+        config = conference_config(false);
+        config.conference.enabled = false;
+        config.conference.target.clear();
+      },
+      path);
+  gateway_up(gateway);
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  const json before = get_json(client, "/api/status").at("conference");
+  CHECK(!before.at("enabled").get<bool>());
+  CHECK_EQ(before.at("state").get<std::string>(), std::string("disabled"));
+
+  const auto saved = client.Post("/api/conference/config",
+                                 json{{"enabled", true},
+                                      {"account", "pbx"},
+                                      {"target", "sip:conf@pbx.example.com"},
+                                      {"display_name", "FreePBX"}}
+                                     .dump(),
+                                 "application/json");
+  CHECK(saved && saved->status == 200);
+  const json set_up = json::parse(saved->body);
+  CHECK(set_up.at("enabled").get<bool>());
+  CHECK_EQ(set_up.at("target").get<std::string>(),
+           std::string("sip:conf@pbx.example.com"));
+  CHECK_EQ(set_up.at("name").get<std::string>(), std::string("FreePBX"));
+
+  CHECK(gateway.wait_for(conference_in_call, 8000));
+  const json persisted = get_json(client, "/api/config").at("conference");
+  CHECK(persisted.at("enabled").get<bool>());
+  CHECK_EQ(persisted.at("account").get<std::string>(), std::string("pbx"));
+  CHECK_EQ(persisted.at("display_name").get<std::string>(), std::string("FreePBX"));
+
+  const json on_disk = saved_config_file(path);
+  CHECK(!on_disk.is_null());
+  CHECK(on_disk.at("conference").at("enabled").get<bool>());
+  CHECK_EQ(on_disk.at("conference").at("target").get<std::string>(),
+           std::string("sip:conf@pbx.example.com"));
+  CHECK_EQ(on_disk.at("conference").at("display_name").get<std::string>(),
+           std::string("FreePBX"));
+
+  // A partial update is partial: the keys it does not name keep their values, in
+  // the reply and in the file.
+  const auto retargeted = client.Post(
+      "/api/conference/config",
+      json{{"target", "sip:room2@pbx.example.com"}}.dump(), "application/json");
+  CHECK(retargeted && retargeted->status == 200);
+  const json moved = json::parse(retargeted->body);
+  CHECK(moved.at("enabled").get<bool>());
+  CHECK_EQ(moved.at("account").get<std::string>(), std::string("pbx"));
+  CHECK_EQ(moved.at("name").get<std::string>(), std::string("FreePBX"));
+  CHECK_EQ(moved.at("target").get<std::string>(),
+           std::string("sip:room2@pbx.example.com"));
+  const json file_after = saved_config_file(path).at("conference");
+  CHECK(file_after.at("enabled").get<bool>());
+  CHECK_EQ(file_after.at("account").get<std::string>(), std::string("pbx"));
+  CHECK_EQ(file_after.at("display_name").get<std::string>(),
+           std::string("FreePBX"));
+  CHECK_EQ(file_after.at("target").get<std::string>(),
+           std::string("sip:room2@pbx.example.com"));
+
+  gateway.stop();
+}
+
+TEST_CASE(conference_setup_refuses_what_could_not_work) {
+  const std::string path = "aes67-sip-conference-refuse-test.conf";
+  Gateway gateway(
+      true,
+      [](Config& config) {
+        config = conference_config(false);
+        config.conference.enabled = false;
+        config.conference.target.clear();
+      },
+      path);
+  gateway_up(gateway);
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  // Enabled with nothing to dial.
+  const auto no_target = client.Post(
+      "/api/conference/config",
+      json{{"enabled", true}, {"account", "pbx"}, {"target", ""}}.dump(),
+      "application/json");
+  CHECK(no_target && no_target->status == 400);
+  CHECK(no_target->body.find("conference.target") != std::string::npos);
+
+  // An account nobody declared.
+  const auto unknown_account =
+      client.Post("/api/conference/config",
+                  json{{"enabled", true},
+                       {"account", "nosuchaccount"},
+                       {"target", "sip:conf@pbx.example.com"}}
+                      .dump(),
+                  "application/json");
+  CHECK(unknown_account && unknown_account->status == 400);
+  CHECK(unknown_account->body.find("nosuchaccount") != std::string::npos);
+
+  // A key the block does not have is a refusal, not a typo nothing reads.
+  const auto typo = client.Post(
+      "/api/conference/config",
+      json{{"targert", "sip:conf@pbx.example.com"}}.dump(), "application/json");
+  CHECK(typo && typo->status == 400);
+  CHECK(typo->body.find("targert") != std::string::npos);
+
+  // A call control on a leg that is not configured says which switch is off.
+  const auto dial_disabled = client.Post(
+      "/api/conference/call", json{{"action", "dial"}}.dump(), "application/json");
+  CHECK(dial_disabled && dial_disabled->status == 400);
+  CHECK(dial_disabled->body.find("conference.enabled") != std::string::npos);
+
+  // None of the four applied anything: the site still has no leg, and nothing was
+  // written to the file a rebuild would restore.
+  const json status = get_json(client, "/api/status").at("conference");
+  CHECK(!status.at("enabled").get<bool>());
+  CHECK_EQ(status.at("state").get<std::string>(), std::string("disabled"));
+  CHECK(saved_config_file(path).is_null());
+
+  gateway.stop();
+}
+
+TEST_CASE(conference_hang_up_holds_the_leg_down_until_dial) {
+  // Its own config path: this case saves through POST /api/config, and the shared
+  // one is re-read by whichever test restarts from the file next.
+  const std::string path = "aes67-sip-conference-hold-test.conf";
+  Gateway gateway(
+      true, [](Config& config) { config = conference_config(true); }, path);
+  gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
+    return gateway.restart_from_file(restart_error);
+  });
+  gateway_up(gateway);
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+  CHECK(gateway.wait_for(conference_in_call, 8000));
+
+  // Hang up by hand: the call goes, and the five second retry does not raise it
+  // again - without that, the button would be a lie.
+  const auto hung_up =
+      client.Post("/api/conference/call", json{{"action", "hangup"}}.dump(),
+                  "application/json");
+  CHECK(hung_up && hung_up->status == 200);
+  const json after_hangup = json::parse(hung_up->body).at("conference");
+  CHECK_EQ(after_hangup.at("state").get<std::string>(), std::string("idle"));
+  CHECK(after_hangup.at("redial_paused").get<bool>());
+
+  // Longer than the retry interval: unheld, the supervisor would have dialled it.
+  std::this_thread::sleep_for(std::chrono::milliseconds(6000));
+  const json still_down = get_json(client, "/api/status").at("conference");
+  CHECK(still_down.at("redial_paused").get<bool>());
+  CHECK_EQ(still_down.at("state").get<std::string>(), std::string("idle"));
+
+  // Dial raises it now and clears the hold.
+  const auto dialled = client.Post(
+      "/api/conference/call", json{{"action", "dial"}}.dump(), "application/json");
+  CHECK(dialled && dialled->status == 200);
+  CHECK(gateway.wait_for(conference_in_call, 8000));
+  CHECK(!get_json(client, "/api/status")
+             .at("conference")
+             .at("redial_paused")
+             .get<bool>());
+
+  // An action the leg does not have is refused rather than ignored.
+  const auto unknown =
+      client.Post("/api/conference/call", json{{"action", "answer"}}.dump(),
+                  "application/json");
+  CHECK(unknown && unknown->status == 400);
+  CHECK(unknown->body.find("dial or hangup") != std::string::npos);
+
+  // A hang up by hand holds the leg down, but a change that would raise a
+  // *different* call is the operator saying "try it again" - and it clears through
+  // the generic config route as well, which is the Settings editor's path rather
+  // than this card's.
+  const auto held =
+      client.Post("/api/conference/call", json{{"action", "hangup"}}.dump(),
+                  "application/json");
+  CHECK(held && held->status == 200);
+  CHECK(json::parse(held->body).at("conference").at("redial_paused").get<bool>());
+  const auto retargeted = client.Post(
+      "/api/config",
+      json{{"conference", json{{"target", "sip:other@pbx.example.com"}}}}.dump(),
+      "application/json");
+  CHECK(retargeted && retargeted->status == 200);
+  CHECK(gateway.wait_for(
+      [](const json& status) {
+        return conference_in_call(status) &&
+               !json_get_path<bool>(status, {"conference", "redial_paused"}, true);
+      },
+      8000));
+
+  gateway.stop();
+}
+
 TEST_CASE(conference_leg_isolation_holds_in_both_directions) {
   // One site, two lines: "cameras" claims the conference, "stage" does not.  With
   // the tone on, every member of both lines is talking, so the two directions can
@@ -1244,7 +1484,7 @@ TEST_CASE(conference_leg_isolation_holds_in_both_directions) {
   gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
     return gateway.restart_from_file(restart_error);
   });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
   CHECK(gateway.wait_for(conference_in_call, 8000));
@@ -1341,7 +1581,7 @@ TEST_CASE(rest_api_self_test_reports_each_party_line_and_who_is_silent) {
     config = party_line_config();
     config.audio.null_tone_hz = 0.0;  // silence first: the members are quiet
   });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -1414,7 +1654,7 @@ TEST_CASE(rest_api_self_test_reports_a_line_nobody_can_talk_on) {
       member.talk_channel = -1;
     }
   });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -1441,7 +1681,7 @@ TEST_CASE(rest_api_self_test_is_honest_when_it_cannot_judge_the_matrix) {
   // must not be reported as broken party lines, and an unavailable SIP engine must
   // not stop the matrix from being judged.
   Gateway gateway(true, [](Config& config) { config = party_line_config(); });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
   CHECK(!self_test_check(run_self_test(client), "party line cameras (Cameras)")
@@ -1483,7 +1723,7 @@ TEST_CASE(rest_api_plays_a_commissioning_tone_on_a_line) {
   // levels, be visible as running, and stop when told to.  The default fixture has
   // one line on channels 0 and 1 and no matrix writing those channels.
   Gateway gateway;
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -1545,7 +1785,7 @@ TEST_CASE(rest_api_reports_silence_as_null_not_as_ever_decreasing_db) {
     config = party_line_config();
     config.audio.null_tone_hz = 0.0;  // nothing is talking anywhere
   });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -1575,7 +1815,7 @@ TEST_CASE(rest_api_refuses_a_tone_on_a_line_with_no_channel_on_the_device) {
     config.lines[0].aes67.channels = {12};  // device opens 4 channels
     config.audio.channels = 4;
   });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -1607,7 +1847,7 @@ TEST_CASE(rest_api_does_not_blame_the_daemon_for_a_sink_without_a_stream) {
   // status must say *that* rather than surfacing a daemon error - which is what the
   // front end flashed - and must not report the daemon as unreachable.
   Gateway gateway(true, [](Config& config) { config = party_line_config(); });
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 
@@ -1637,7 +1877,7 @@ TEST_CASE(rest_api_does_not_blame_the_daemon_for_a_sink_without_a_stream) {
 
 TEST_CASE(rest_api_self_test_reports_checks) {
   Gateway gateway;
-  CHECK(gateway.start());
+  gateway_up(gateway);
   httplib::Client client("127.0.0.1", kTestPort);
   client.set_connection_timeout(2, 0);
 

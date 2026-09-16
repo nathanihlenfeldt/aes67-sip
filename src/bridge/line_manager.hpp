@@ -70,8 +70,29 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
   /** Configuration view of one line (`GET /api/lines/{id}/config`). */
   bool line_config(int line_id, json* config, std::string* error) const;
 
-  /** Applies a partial configuration update and persists it. */
+  /** Applies a partial configuration update and persists it.  Unlike the
+   * conference block, a line patch accepts any key it carries (a typo is merged
+   * and ignored rather than refused) - `id` excepted, which names the line. */
   bool update_line(int line_id, const json& patch, std::string* error);
+
+  /**
+   * Applies a partial update to the conference block (`enabled`, `account`,
+   * `target`, `display_name`) and persists it, used by
+   * `POST /api/conference/config`.  The candidate configuration is validated as a
+   * whole before anything is written or dialled, so a leg that could not work -
+   * enabled with no target, an account nobody declared - is refused with the file
+   * and the running appliance untouched.
+   */
+  bool update_conference(const json& patch, std::string* error);
+
+  /**
+   * Call control for the conference leg, used by `POST /api/conference/call`.
+   * `dial` raises the call now, and `hangup` drops it and holds it down: the
+   * supervisor does not raise a leg the operator has just hung up until the next
+   * `dial`, a change that would raise a different call (`enabled`, `account` or
+   * `target`), or a restart.
+   */
+  bool conference_action(const std::string& action, std::string* error);
 
   /** Call control used by `POST /api/lines/{id}/call`. */
   bool call_action(int line_id, const std::string& action, const json& body,
@@ -202,6 +223,21 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
 
   mutable std::mutex mutex_;
   std::map<int, std::shared_ptr<LineRuntime>> lines_;
+  /**
+   * True while the conference leg was hung up by hand: the supervisor then leaves
+   * it alone instead of dialling it again five seconds later.  Cleared by a dial
+   * request, by a change that would raise a different call, and by a restart.
+   * Guarded by `mutex_`.
+   */
+  bool conference_held_{false};
+  /**
+   * The conference block as last applied, so `apply_conference` can tell a change
+   * that would raise a *different* call - which is what an operator means by
+   * "try it again" - from an edit that leaves the call alone (a rename).  It is
+   * what makes the hold clear the same way whichever route changed the block.
+   * Guarded by `mutex_`.
+   */
+  ConferenceConfig applied_conference_{};
   /**
    * Daemon ids of the endpoint streams created by the last apply, so the ones
    * whose endpoint is configured away can be deleted again.  Guarded by `mutex_`.

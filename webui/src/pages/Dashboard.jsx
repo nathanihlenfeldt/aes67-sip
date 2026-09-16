@@ -198,7 +198,9 @@ export default function Dashboard() {
                 title={conference.detail || 'the off-site call'}
               />
               <span className="muted small">
-                {conference.detail || (conference.state === 'in_call' ? 'in call' : '')}
+                {conference.redial_paused
+                  ? 'hung up by hand - dial to raise it again'
+                  : conference.detail || (conference.state === 'in_call' ? 'in call' : '')}
               </span>
             </div>
             <KV label="Account" mono>
@@ -220,9 +222,10 @@ export default function Dashboard() {
           </>
         ) : (
           <div className="empty">
-            No off-site conference leg is configured. Set <span className="mono">conference.enabled</span>{' '}
-            and its <span className="mono">target</span>, and tick <em>conference</em> on the party
-            lines that should reach it.
+            No off-site conference leg is configured. Set one up on the{' '}
+            <Link to="/lines">Lines</Link> page — enable it, pick the account and type the
+            target to dial — and tick <em>conference</em> on the party lines that should
+            reach it.
           </div>
         )}
       </Card>

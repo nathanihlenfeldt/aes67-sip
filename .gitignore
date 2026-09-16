@@ -17,6 +17,11 @@ npm-debug.log*
 *.log
 status.json
 config/status.json
+# the gateway tests write their configuration next to the test binary
+aes67-sip-gateway-test.conf
+aes67-sip-conference-setup-test.conf
+aes67-sip-conference-refuse-test.conf
+aes67-sip-conference-hold-test.conf
 
 # editor / os
 .DS_Store

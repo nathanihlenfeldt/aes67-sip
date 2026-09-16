@@ -36,7 +36,7 @@ endpoint nobody declares, or declared endpoint shapes wider than `audio.channels
 On a refusal neither the configuration file nor the running appliance is touched, so the
 reason can be fixed and resubmitted. The web UI shows the body as `save failed: …`
 (Settings) or `not saved: …` (the party-lines page, which also marks the entry the reason
-names).
+names); the conference card on the Lines page shows its own refusals as `not applied: …`.
 
 The file is written *before* the change is applied: if it cannot be written the request
 fails with `500` and the reason, and neither the file nor the running configuration
@@ -131,9 +131,14 @@ with `claims_conference`.
   "enabled": true, "name": "Conference", "account": "pbx",
   "target": "sip:conf@pbx.example.com",
   "state": "in_call", "state_code": 200, "detail": "answered",
+  "redial_paused": false,
   "levels": { "to_conference_dbfs": -18.0, "from_conference_dbfs": -21.5 }
 }
 ```
+
+`redial_paused` is true when the leg was hung up by hand (`POST /api/conference/call`): the
+state is `idle` and no retry is coming, which an operator has to be able to tell apart from a
+leg waiting for its next attempt.
 
 `party_lines[]` reports the intercom matrix: each party line with its members, and
 for each member the endpoint that owns it, the endpoint's own channel indices it
@@ -276,6 +281,44 @@ source for bench testing when no endpoint SDP is configured.
 | `dtmf` | `digits` | send RFC2833 DTMF |
 
 Response: `{ "ok": true, "line": <line status object> }`.
+
+### The conference leg: `POST /api/conference/config` and `POST /api/conference/call`
+
+The conference is a call, but it is not one of `lines[]`: it has its own block in the
+configuration and its own view (`status.conference`), so it has its own two routes rather than a
+reserved id in the line paths. Which party lines hear it is not here at all - that is each party
+line's `claims_conference` flag, a membership rather than a property of the leg.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/conference/config` | partial update of the `conference` block (persisted); returns the conference **status** |
+| `POST` | `/api/conference/call` | call control, `dial` or `hangup`; returns `{ "ok": true, "conference": <status> }` |
+
+`POST /api/conference/config` accepts the block's own keys and nothing else:
+
+```json
+{ "enabled": true, "account": "pbx", "target": "sip:300@10.0.0.5",
+  "display_name": "FreePBX" }
+```
+
+A key the block does not have is refused, so a typo is a `400` rather than a key nothing reads.
+The candidate configuration is validated as a whole before the file or the running appliance is
+touched: a leg that is enabled with no `target`, or that names an account nobody declared, is
+refused with the file and the leg exactly as they were.
+
+`POST /api/conference/call` takes `{ "action": "dial" }` or `{ "action": "hangup" }`:
+
+| action | effect |
+| --- | --- |
+| `dial` | raise the call now instead of waiting for the next retry, and stop pausing it |
+| `hangup` | drop the call **and hold it down**: the supervisor's five second retry waits for the next `dial` |
+
+The hold is the point of `hangup`: without it the leg would be raised again five seconds later.
+`status.conference.redial_paused` reports it, and it is cleared by `dial`, by a change that would
+raise a different call (`enabled`, `account` or `target` - renaming the leg does not), or by a
+restart. `hangup` on a leg that is already idle is reported as success and still pauses the retry
+- "hang up" on a leg with no call means "stay down" - and either action on a leg that is not
+configured is a `400` naming `conference.enabled`.
 
 ## 6. AES67 daemon passthrough
 

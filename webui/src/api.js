@@ -97,6 +97,26 @@ export function setLineConfig(id, config) {
   return request(`/lines/${encodeURIComponent(id)}/config`, { method: 'POST', body: config });
 }
 
+/* ------------------------------------------------------------------ */
+/* The conference leg                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * POST /api/conference/config -> the conference status after the update.
+ * The patch carries the block's own keys: enabled, account, target, display_name.
+ */
+export function setConferenceConfig(patch) {
+  return request('/conference/config', { method: 'POST', body: patch });
+}
+
+/**
+ * POST /api/conference/call -> { ok, conference }
+ * action: dial | hangup
+ */
+export function conferenceCall(action) {
+  return request('/conference/call', { method: 'POST', body: { action } });
+}
+
 /**
  * POST /api/lines/{id}/call -> { ok, line }
  * action: dial | answer | hangup | hold | dtmf
@@ -212,6 +232,8 @@ export default {
   getLine,
   getLineConfig,
   setLineConfig,
+  setConferenceConfig,
+  conferenceCall,
   lineCall,
   getLineLevels,
   getAes67Config,
