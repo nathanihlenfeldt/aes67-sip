@@ -9,7 +9,7 @@
 import { useState } from 'react';
 
 import { useGlobalStatus } from '../StatusContext';
-import { getLineConfig, setLineConfig, lineCall } from '../api';
+import { getLineConfig, setLineConfig, lineCall, lineTone } from '../api';
 import { arr, fmtDb, fmtDuration, num } from '../format';
 import Card from '../components/Card';
 import StatusPill from '../components/StatusPill';
@@ -77,7 +77,7 @@ export {
   DtmfPad,
 };
 
-function LineEditor({ line, config, onSave, onCall, onReload, busy }) {
+function LineEditor({ line, config, onSave, onCall, onTone, onReload, busy }) {
   const cfgSip = config?.sip || {};
   const cfgAes = config?.aes67 || {};
   const liveAes = line.aes67 || {};
@@ -361,6 +361,37 @@ function LineEditor({ line, config, onSave, onCall, onReload, busy }) {
         </div>
       </Section>
 
+      <Section title="Commissioning">
+        <div className="field-row align-center">
+          <button
+            type="button"
+            className="btn btn-small"
+            disabled={busy}
+            onClick={() => onTone('start', { hz: 1000, seconds: 5 })}
+          >
+            test tone (1 kHz, 5 s)
+          </button>
+          <button
+            type="button"
+            className="btn btn-small btn-ghost"
+            disabled={busy || !line.test_tone}
+            onClick={() => onTone('stop')}
+          >
+            stop
+          </button>
+          <StatusPill state={line.test_tone} tone={line.test_tone ? 'warn' : 'off'}>
+            {line.test_tone ? 'tone on' : 'tone off'}
+          </StatusPill>
+          <LevelMeter level={line.levels && line.levels.tx_dbfs} label="AES67 out" compact />
+        </div>
+        <p className="muted small">
+          Puts a tone on this line&apos;s AES67 <strong>output</strong> channels - what the daemon publishes
+          as its source - so an outbound path can be proved without a PBX call or an endpoint:
+          subscribe something to that source and listen, or loop it back (a sink subscribed to
+          our own source) and bind a party line&apos;s member to the returned capture channel.
+        </p>
+      </Section>
+
       <div className="editor-foot">
         {formError ? <span className="inline-error">{formError}</span> : null}
         <button type="button" className="btn btn-small btn-ghost" onClick={onReload} disabled={busy}>
@@ -435,6 +466,13 @@ export default function Lines() {
 
   const doCall = (id, action, extra) =>
     withBusy(id, () => lineCall(id, action, extra), `${action} sent`);
+
+  const doTone = (id, action, extra) =>
+    withBusy(
+      id,
+      () => lineTone(id, action, extra),
+      action === 'stop' ? 'test tone stopped' : 'test tone running for 5 s',
+    );
 
   return (
     <div className="page">
@@ -542,6 +580,7 @@ export default function Lines() {
                             busy={busy}
                             onSave={(payload) => saveConfig(line.id, payload)}
                             onCall={(action, extra) => doCall(line.id, action, extra)}
+                            onTone={(action, extra) => doTone(line.id, action, extra)}
                             onReload={() => loadConfig(line.id)}
                           />
                         )}

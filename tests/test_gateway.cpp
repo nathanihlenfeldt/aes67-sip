@@ -1457,6 +1457,128 @@ TEST_CASE(rest_api_self_test_is_honest_when_it_cannot_judge_the_matrix) {
   no_sip.stop();
 }
 
+TEST_CASE(rest_api_plays_a_commissioning_tone_on_a_line) {
+  // The tone is how a path is proven without a PBX or an endpoint: it goes onto the
+  // line's AES67 output channels, so it must show up in the device's playback
+  // levels, be visible as running, and stop when told to.  The default fixture has
+  // one line on channels 0 and 1 and no matrix writing those channels.
+  Gateway gateway;
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  // Silent to begin with: no call is up, so nothing is played to the device.
+  const json before = get_json(client, "/api/status");
+  CHECK(is_silent(before.at("audio").at("playback_dbfs")[0]));
+  CHECK(is_silent(before.at("audio").at("playback_dbfs")[1]));
+  CHECK(!before.at("lines")[0].at("test_tone").get<bool>());
+
+  // A bare body gets the commissioning default: 1 kHz for five seconds.
+  const auto started = client.Post("/api/lines/0/tone", "{}", "application/json");
+  CHECK(started && started->status == 200);
+  const json started_line = json::parse(started->body).at("line");
+  CHECK(started_line.at("test_tone").get<bool>());
+  // The tone reaches the line's channels on the device, and the meter says so.
+  CHECK(gateway.wait_for(
+      [](const json& status) {
+        return playback_level(status, 0) > -30.0 &&
+               playback_level(status, 1) > -30.0;
+      },
+      4000));
+
+  // Stopping it takes it off the channels again, within the meter's bounded decay.
+  const auto stopped = client.Post(
+      "/api/lines/0/tone", json{{"action", "stop"}}.dump(), "application/json");
+  CHECK(stopped && stopped->status == 200);
+  CHECK(!json::parse(stopped->body).at("line").at("test_tone").get<bool>());
+  CHECK(gateway.wait_for(
+      [](const json& status) {
+        return is_silent(status.at("audio").at("playback_dbfs")[0]);
+      },
+      3000));
+
+  // Refusals: an unknown line, an unknown action and a nonsense frequency are all
+  // answered with the reason rather than accepted.
+  const auto unknown_line =
+      client.Post("/api/lines/9/tone", "{}", "application/json");
+  CHECK(unknown_line && unknown_line->status == 400);
+  CHECK(unknown_line->body.find("unknown line") != std::string::npos);
+  const auto unknown_action = client.Post(
+      "/api/lines/0/tone", json{{"action", "sing"}}.dump(), "application/json");
+  CHECK(unknown_action && unknown_action->status == 400);
+  CHECK(unknown_action->body.find("unknown tone action") != std::string::npos);
+  const auto bad_hz =
+      client.Post("/api/lines/0/tone", json{{"action", "start"}, {"hz", 1}}.dump(),
+                  "application/json");
+  CHECK(bad_hz && bad_hz->status == 400);
+  CHECK(bad_hz->body.find("hz must be between") != std::string::npos);
+
+  gateway.stop();
+}
+
+TEST_CASE(rest_api_reports_silence_as_null_not_as_ever_decreasing_db) {
+  // A meter that decays without a floor reports -47796 dBFS after a quiet minute,
+  // which reads like a broken meter rather than a quiet one; silence is the floor,
+  // and it serialises as null - which is what the API documents and what the UI
+  // renders as "-inf".
+  Gateway gateway(true, [](Config& config) {
+    config = party_line_config();
+    config.audio.null_tone_hz = 0.0;  // nothing is talking anywhere
+  });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  // Let the meters sit in silence for a while, then read them: every level is the
+  // floor, so every level is null - not a huge negative number.
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  const json status = get_json(client, "/api/status");
+  CHECK_EQ(status.at("party_lines").size(), 1U);
+  for (const auto& level : status.at("audio").at("playback_dbfs")) {
+    CHECK(level.is_null());
+  }
+  for (const auto& level : status.at("audio").at("levels_dbfs")) {
+    CHECK(level.is_null());
+  }
+  for (const auto& member : status.at("party_lines")[0].at("members")) {
+    CHECK(member.at("level_dbfs").is_null());
+    CHECK(!member.at("arriving").get<bool>());
+  }
+
+  gateway.stop();
+}
+
+TEST_CASE(rest_api_refuses_a_tone_on_a_line_with_no_channel_on_the_device) {
+  // A line whose channels are all outside the opened device cannot put a tone
+  // anywhere: better a refusal than a "running" tone that is never written.
+  Gateway gateway(true, [](Config& config) {
+    config.lines[0].aes67.channels = {12};  // device opens 4 channels
+    config.audio.channels = 4;
+  });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  const auto refused = client.Post("/api/lines/0/tone", "{}", "application/json");
+  CHECK(refused && refused->status == 400);
+  CHECK(refused->body.find("no AES67 channel inside the device") !=
+        std::string::npos);
+  CHECK(!get_json(client, "/api/lines/0").at("test_tone").get<bool>());
+
+  // A value of the wrong type is refused rather than quietly replaced by the
+  // default, which would make the tone look like it had been honoured.
+  Gateway ok(true, [](Config& config) { config = test_config(); });
+  CHECK(ok.start());
+  const auto wrong_type = client.Post(
+      "/api/lines/0/tone", json{{"action", "start"}, {"hz", "loud"}}.dump(),
+      "application/json");
+  CHECK(wrong_type && wrong_type->status == 400);
+  CHECK(wrong_type->body.find("hz must be a number") != std::string::npos);
+
+  gateway.stop();
+  ok.stop();
+}
+
 TEST_CASE(rest_api_self_test_reports_checks) {
   Gateway gateway;
   CHECK(gateway.start());

@@ -225,6 +225,11 @@ void AudioRouter::start_test_tone(int line_id, double hz, double seconds) {
   LOG_INFO("test tone ", hz, " Hz -> line ", line_id, " for ", seconds, " s");
 }
 
+void AudioRouter::stop_test_tone(int line_id) {
+  with_line(line_id, [&](Line& line) { line.tone_until = 0.0; });
+  LOG_INFO("test tone stopped on line ", line_id);
+}
+
 bool AudioRouter::test_tone_running(int line_id) const {
   const auto target = line(line_id);
   return target != nullptr && target->tone_until > monotonic_seconds();

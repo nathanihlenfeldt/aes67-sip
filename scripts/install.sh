@@ -272,9 +272,20 @@ fi
 # ---------------------------------------------------------------------------
 if [[ ${SKIP_KERNEL_MODULE} -eq 1 ]]; then
   log "skipping the RAVENNA kernel module (--skip-kernel-module)"
-elif lsmod | grep -q '^MergingRavennaALSA'; then
-  log "the MergingRavennaALSA module is already loaded"
+elif lsmod | grep -q '^MergingRavennaALSA' &&
+     dkms status -m ravenna-alsa-lkm 2>/dev/null | grep -q "$(uname -r).*installed"; then
+  log "the MergingRavennaALSA module is already loaded and DKMS-managed for $(uname -r)"
 else
+  # Either the module is not loaded, or it is loaded but no DKMS entry manages it -
+  # a module built by hand or left behind by an older install disappears at the next
+  # kernel upgrade, and takes the appliance's audio device with it.  Building and
+  # registering it is safe while it is in use: DKMS only writes the module into
+  # /lib/modules, so the running one keeps serving until the next boot.
+  if lsmod | grep -q '^MergingRavennaALSA'; then
+    warn "the MergingRavennaALSA module is loaded but no DKMS entry builds it for"
+    warn "  $(uname -r): a kernel upgrade would leave the appliance without its audio"
+    warn "  device, so it is being built and registered with DKMS now"
+  fi
   log "building the Merging RAVENNA/AES67 kernel module (DKMS)"
   LKM_DIR="/usr/src/ravenna-alsa-lkm"
   if [[ -d "${LKM_DIR}/.git" ]]; then
@@ -449,8 +460,15 @@ print(f"interface_name={cfg['interface_name']} streamer_enabled=False "
 PY
     fi
   fi
-  if [[ ${DRY_RUN} -eq 0 ]]; then
-    run systemctl enable --now aes67-daemon || warn "cannot start aes67-daemon"
+  if [[ ${DRY_RUN} -eq 0 && ${START_SERVICES} -eq 1 ]]; then
+    # `enable --now` does nothing to a unit that is already running, which is how a
+    # rebuild on an appliance that had an older install ended up *running the old
+    # binaries* (and an old config) until somebody rebooted it.  Enable, then
+    # restart, so what is running is what was just installed.
+    run systemctl enable aes67-daemon || warn "cannot enable aes67-daemon"
+    run systemctl restart aes67-daemon || warn "cannot restart aes67-daemon (check journalctl -u aes67-daemon)"
+  elif [[ ${DRY_RUN} -eq 0 ]]; then
+    run systemctl enable aes67-daemon || warn "cannot enable aes67-daemon"
   fi
 fi
 
@@ -546,7 +564,10 @@ PY
   run install -m 0644 "${SRC_DIR}/systemd/aes67-sip.service" "${SYSTEMD_UNIT}"
   run systemctl daemon-reload
   if [[ ${START_SERVICES} -eq 1 ]]; then
-    run systemctl enable --now aes67-sip || warn "cannot start aes67-sip (check journalctl -u aes67-sip)"
+    # Same reason as the daemon above: restart, not just enable --now, so an
+    # appliance that already had a gateway running gets the newly built one.
+    run systemctl enable aes67-sip || warn "cannot enable aes67-sip"
+    run systemctl restart aes67-sip || warn "cannot restart aes67-sip (check journalctl -u aes67-sip)"
   fi
 fi
 
@@ -677,6 +698,15 @@ if [[ ${SKIP_GATEWAY} -eq 0 ]]; then
       "$(systemctl is-enabled aes67-sip 2>/dev/null)" >&2
     journalctl -u aes67-sip -n 12 --no-pager 2>/dev/null |
       sed 's/^/    /' >&2 || true
+    # The usual cause seen in the field: a preserved /etc/daemon.conf from an older
+    # install still has the daemon on the gateway's own port, so the gateway cannot
+    # bind it.  The daemon config is never overwritten (it may be a site's), so say
+    # what to change instead of changing it.
+    if ss -ltnp 2>/dev/null | grep -q ':8081 .*aes67-daemon'; then
+      printf '    cause: aes67-daemon is listening on :8081, the gateway port.\n' >&2
+      printf '    fix: set "http_port": 8080 in /etc/daemon.conf and\n' >&2
+      printf '         systemctl restart aes67-daemon aes67-sip\n' >&2
+    fi
     warn "run 'journalctl -u aes67-sip -n 40 --no-pager' for the full log"
   fi
 fi

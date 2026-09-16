@@ -116,6 +116,8 @@ class AudioRouter {
 
   /** Writes a test tone to the line's AES67 channels for `seconds`. */
   void start_test_tone(int line_id, double hz, double seconds);
+  /** Stops a running test tone on the line. */
+  void stop_test_tone(int line_id);
   bool test_tone_running(int line_id) const;
 
   const AudioFormat& format() const { return format_; }

@@ -170,7 +170,7 @@ json ApiServer::party_lines_status() const {
                              {"talk_channel", member.talk_channel},
                              {"listen_channel", member.listen_channel},
                              {"contribution_db", member.contribution_db},
-                             {"level_dbfs", member.level_dbfs},
+                             {"level_dbfs", dbfs_to_json(member.level_dbfs)},
                              {"arriving", member.arriving}});
     }
     // The summary is derived by the matrix, so the commissioning page, the
@@ -317,6 +317,30 @@ void ApiServer::register_routes() {
               }
               reply_json(response, lines_->line_status(line_id));
             });
+
+  svr->Post(R"(/api/lines/([0-9]+)/tone)", [this](const httplib::Request& request,
+                                                  httplib::Response& response) {
+    int line_id = 0;
+    if (!path_int(request, &line_id)) {
+      reply_error(response, 400, "invalid line id");
+      return;
+    }
+    std::string error;
+    const json body = parse_body(request, &error);
+    if (body.is_null()) {
+      reply_error(response, 400, error);
+      return;
+    }
+    // Defaults to a 1 kHz tone for five seconds: the commissioning check
+    // is one click, and the body only exists for the rare other case.
+    const std::string action = json_get<std::string>(body, "action", "start");
+    if (!lines_->test_tone(line_id, action, body, &error)) {
+      reply_error(response, 400, error);
+      return;
+    }
+    reply_json(response,
+               json{{"ok", true}, {"line", lines_->line_status(line_id)}});
+  });
 
   svr->Post(R"(/api/lines/([0-9]+)/call)",
             [this](const httplib::Request& request, httplib::Response& response) {

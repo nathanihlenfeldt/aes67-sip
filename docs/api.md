@@ -103,14 +103,18 @@ Single poll endpoint used by the UI.
                   "sip_rx_dbfs": -22.0, "sip_tx_dbfs": -18.2 },
       "gain_db": 0.0,
       "mute": false,
-      "ptt": false
+      "ptt": false,
+      "test_tone": false
     }
   ]
 }
 ```
 
 `state` is one of `disabled`, `idle`, `dialing`, `ringing`, `in_call`, `error`.
-Levels are dBFS floats; silence is serialised as `null`.
+Levels are dBFS floats; silence is serialised as `null` (including the meter floor, so a
+level that has been quiet for a while reads as `null` rather than as a huge negative
+number). `test_tone` says whether the commissioning tone is currently on that line's AES67
+output channels (see `POST /api/lines/{id}/tone`).
 
 `conference` is the off-site conference leg — one call whose media is the matrix's
 conference sides rather than a line's channels. `state` is the same vocabulary as a line
@@ -213,7 +217,21 @@ and is refreshed every 2 s, `aes67.error` aggregates the RTP error flags
 | `GET` | `/api/lines/{id}/config` | line configuration object |
 | `POST` | `/api/lines/{id}/config` | partial line configuration update (persisted); returns the updated line **status** object |
 | `POST` | `/api/lines/{id}/call` | call control, see below |
+| `POST` | `/api/lines/{id}/tone` | the commissioning test tone on the line's AES67 output channels, see below |
 | `GET` | `/api/lines/{id}/levels` | `{ "rx_dbfs": -18.2, "tx_dbfs": -60.0, "sip_rx_dbfs": -60.0, "sip_tx_dbfs": -18.2 }` |
+
+`POST /api/lines/{id}/tone` puts a tone on the RAVENNA **output** channels of one line -
+what the daemon publishes as that line's source - which is how an outbound path is proved
+without a PBX call or an endpoint: subscribe an endpoint (or the daemon) to that source and
+listen, or subscribe the appliance's own sink back to it (`aes67.commissioning_loopback`)
+so the tone returns as a *capture* channel that a party line's members can then be bound
+to.  It is written only to that line's own channels, and only while the line has at least
+one channel inside the opened device. Body: `{ "action": "start" | "stop", "hz": 1000,
+"seconds": 5 }`; a bare `{}` starts the commissioning default (1 kHz for five seconds). The
+reply is `{ "ok": true, "line": <line status> }`, and `lines[].test_tone` says whether a
+tone is running. An unknown line, the conference leg, an unknown action, a value of the
+wrong type, a frequency outside 20-20000 Hz, a duration outside 0.1-600 s, or a line with
+no channel on the device is refused with `400` and the reason.
 
 `POST /api/lines/{id}/config` accepts:
 

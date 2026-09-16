@@ -113,6 +113,18 @@ export function getLineLevels(id) {
   return request(`/lines/${encodeURIComponent(id)}/levels`);
 }
 
+/**
+ * POST /api/lines/{id}/tone -> the line's status after the change.
+ * action: start (hz, seconds) | stop - the commissioning tone on the line's AES67
+ * output channels.
+ */
+export function lineTone(id, action, extra = {}) {
+  return request(`/lines/${encodeURIComponent(id)}/tone`, {
+    method: 'POST',
+    body: { action, ...extra },
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* aes67-daemon passthrough                                            */
 /* ------------------------------------------------------------------ */

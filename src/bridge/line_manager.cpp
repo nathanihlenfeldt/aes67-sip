@@ -869,6 +869,8 @@ json LineManager::line_status(int line_id) const {
   levels["sip_rx_dbfs"] = dbfs_to_json(meters.from_sip_dbfs);
   levels["sip_tx_dbfs"] = dbfs_to_json(meters.to_sip_dbfs);
   result["levels"] = levels;
+  // Whether the commissioning tone is currently on this line's AES67 output.
+  result["test_tone"] = router_ != nullptr && router_->test_tone_running(line_id);
   return result;
 }
 
@@ -1038,6 +1040,109 @@ bool LineManager::update_line(int line_id, const json& patch, std::string* error
   apply_line_to_router(merged);
   configure_daemon_streams(merged);
   LOG_INFO("line ", line_id, " (", merged.name, ") updated");
+  return true;
+}
+
+bool LineManager::test_tone(int line_id, const std::string& action,
+                            const json& body, std::string* error) {
+  bool conference = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = lines_.find(line_id);
+    if (it == lines_.end()) {
+      if (error != nullptr) {
+        *error = "unknown line " + std::to_string(line_id);
+      }
+      return false;
+    }
+    conference = it->second->is_conference;
+  }
+  if (conference) {
+    if (error != nullptr) {
+      *error = "the conference leg carries no device channels to put a tone on";
+    }
+    return false;
+  }
+  if (router_ == nullptr) {
+    if (error != nullptr) {
+      *error = "the audio path is not available";
+    }
+    return false;
+  }
+
+  const std::string verb = to_lower(action);
+  if (verb == "stop") {
+    router_->stop_test_tone(line_id);
+    return true;
+  }
+  if (verb != "start") {
+    if (error != nullptr) {
+      *error = "unknown tone action '" + action + "' (start | stop)";
+    }
+    return false;
+  }
+
+  // A line whose channels all sit outside the opened device cannot put a tone
+  // anywhere: refusing is better than reporting a running tone that is never
+  // written (the router only writes channels the device actually has).
+  bool on_device = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = lines_.find(line_id);
+    for (const unsigned channel : it->second->config.aes67.channels) {
+      if (channel < config_->audio.channels) {
+        on_device = true;
+        break;
+      }
+    }
+  }
+  if (!on_device) {
+    if (error != nullptr) {
+      *error = "line " + std::to_string(line_id) +
+               " has no AES67 channel inside the device (aes67.channels vs "
+               "audio.channels " +
+               std::to_string(config_->audio.channels) + ")";
+    }
+    return false;
+  }
+
+  // The numbers are checked as numbers: a value of the wrong JSON type is refused
+  // rather than silently replaced by the default.
+  double hz = 1000.0;
+  if (body.is_object() && body.contains("hz") && !body.at("hz").is_null()) {
+    if (!body.at("hz").is_number()) {
+      if (error != nullptr) {
+        *error = "hz must be a number";
+      }
+      return false;
+    }
+    hz = body.at("hz").get<double>();
+  }
+  if (!(hz >= 20.0 && hz <= 20000.0)) {
+    if (error != nullptr) {
+      *error = "hz must be between 20 and 20000 (got " + std::to_string(hz) + ")";
+    }
+    return false;
+  }
+  double seconds = 5.0;
+  if (body.is_object() && body.contains("seconds") &&
+      !body.at("seconds").is_null()) {
+    if (!body.at("seconds").is_number()) {
+      if (error != nullptr) {
+        *error = "seconds must be a number";
+      }
+      return false;
+    }
+    seconds = body.at("seconds").get<double>();
+  }
+  if (!(seconds >= 0.1 && seconds <= 600.0)) {
+    if (error != nullptr) {
+      *error = "seconds must be between 0.1 and 600 (got " +
+               std::to_string(seconds) + ")";
+    }
+    return false;
+  }
+  router_->start_test_tone(line_id, hz, seconds);
   return true;
 }
 

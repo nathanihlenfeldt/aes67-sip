@@ -1,4 +1,5 @@
 #include <fstream>
+#include <limits>
 
 #include "config.hpp"
 #include "test_framework.hpp"
@@ -169,12 +170,29 @@ TEST_CASE(config_conference_block_round_trip) {
   CHECK_EQ(unnamed.conference.display_name, std::string("Conference"));
 }
 
+namespace {
+constexpr double kNegInf = -std::numeric_limits<double>::infinity();
+}  // namespace
+
 TEST_CASE(util_db_conversions) {
   CHECK_NEAR(linear_to_dbfs(1.0), 0.0, 1e-9);
   CHECK_NEAR(linear_to_dbfs(0.5), -6.0206, 1e-3);
   CHECK(std::isinf(linear_to_dbfs(0.0)));
   CHECK_NEAR(db_to_linear(-6.0206), 0.5, 1e-3);
   CHECK_NEAR(db_to_linear(0.0), 1.0, 1e-12);
+
+  // A held peak decays, but never below the silence floor: a meter that keeps
+  // falling past it reads as -47796 dBFS after a quiet minute, which is a number
+  // nobody can act on.
+  CHECK_NEAR(hold_peak(-6.0, -3.0, 0.5), -3.0, 1e-9);  // a louder reading wins
+  CHECK_NEAR(hold_peak(-6.0, -9.0, 0.5), -6.5, 1e-9);  // otherwise it decays
+  CHECK_NEAR(hold_peak(kSilenceDbfs, kNegInf, 0.5), kSilenceDbfs, 1e-9);
+
+  // Silence serialises as null however it got there, which is what the API
+  // documents and what the UI renders as "-inf".
+  CHECK(dbfs_to_json(kNegInf).is_null());
+  CHECK(dbfs_to_json(kSilenceDbfs).is_null());
+  CHECK(dbfs_to_json(-59.94) == json(-59.9));
 }
 
 TEST_CASE(util_formatting_and_parsing) {

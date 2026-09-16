@@ -149,7 +149,7 @@ intercom use case:
    - **Dashboard** - PTP, daemon reachability, SIP registrations, per-line state/levels,
      the conference leg when one is configured, and each party line with who is arriving
      and who has gone silent
-   - **Lines** - channel mapping, gain/mute, call controls, DTMF, test tone
+   - **Lines** - channel mapping, gain/mute, call controls, DTMF, commissioning test tone
    - **Party lines** - the commissioning view and editor: each line with its members,
      their contribution levels and live levels, and membership, levels and per-channel
      bindings edited here rather than in JSON

@@ -61,7 +61,10 @@ double hold_peak(double previous, double current, double decay_db) {
   if (current >= previous) {
     return current;
   }
-  return std::max(current, previous - decay_db);
+  // Never decay below the silence floor: a held peak that keeps falling past it
+  // produces levels like -47796 dBFS over a long quiet period, which is a number
+  // nobody can act on (and reads as if the meter were broken).  Silence is a level.
+  return std::max({current, previous - decay_db, kSilenceDbfs});
 }
 
 double db_to_linear(double db) {
@@ -137,7 +140,9 @@ std::optional<double> parse_double(const std::string& value) {
 }
 
 json dbfs_to_json(double dbfs) {
-  if (!std::isfinite(dbfs)) {
+  // Silence (and anything below the floor) serialises as null, which is what the
+  // API documents and what the UI renders as "-inf".
+  if (!std::isfinite(dbfs) || dbfs <= kSilenceDbfs) {
     return nullptr;
   }
   return json(std::round(dbfs * 10.0) / 10.0);

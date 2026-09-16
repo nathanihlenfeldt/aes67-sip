@@ -77,6 +77,16 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
   bool call_action(int line_id, const std::string& action, const json& body,
                    std::string* error);
 
+  /**
+   * The commissioning test tone on a line's AES67 output channels, used by
+   * `POST /api/lines/{id}/tone`.  `action` is `start` (with `hz` and `seconds` in
+   * the body) or `stop`.  This is how a line is proven end to end without a PBX or
+   * an endpoint: the tone leaves on the line's RAVENNA channels, so a party line
+   * that carries them (or a loopback sink) makes it audible somewhere real.
+   */
+  bool test_tone(int line_id, const std::string& action, const json& body,
+                 std::string* error);
+
   /** `POST /api/system/self-test` checks. */
   json self_test();
 
