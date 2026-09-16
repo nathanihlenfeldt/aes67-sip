@@ -672,7 +672,58 @@ bool PjsipSipEngine::reload_accounts(const std::vector<SipAccountConfig>& accoun
       false);
 }
 
+void PjsipSipEngine::release_line_account(int line_id, bool forget_status) {
+  const auto it = lines_.find(line_id);
+  if (it != lines_.end()) {
+    if (it->second->account) {
+      try {
+        it->second->account->shutdown();
+      } catch (const pj::Error& err) {
+        LOG_DEBUG("line ", line_id,
+                  ": the account could not be shut down: ", err.info());
+      }
+    }
+    lines_.erase(it);
+  }
+  // One critical section for the whole release: `account_index_` holds a raw
+  // pointer to the account that has just been destroyed, so it must not outlive
+  // it, and what a line reports must not be half forgotten either.
+  std::lock_guard<std::mutex> state_lock(state_mutex_);
+  account_index_.erase(line_id);
+  if (!forget_status) {
+    return;
+  }
+  reg_status_.erase(line_id);
+  call_status_.erase(line_id);
+  call_connected_at_ms_.erase(line_id);
+}
+
 bool PjsipSipEngine::add_line(const LineConfig& line, std::string* error) {
+  if (!line.enabled) {
+    // A line the site has switched off is never handed to pjsua.  Creating an
+    // account for it registered an extension the site does not run, and since an
+    // account's status is rolled up across the lines that share it, the rejection
+    // was what the UI reported for the account as a whole.  The check sits here
+    // rather than below the account lookup, so a disabled line is not reported as a
+    // registration failure either, whatever its sip.account names.  A call it had
+    // up goes with the account: this branch hangs nothing up itself, and whether
+    // pjsua ends the calls of an account it deletes is verified on the appliance,
+    // not by any test here.
+    if (!running_.load()) {
+      // Nothing registers and nothing is released - a stopped engine is torn down
+      // as a whole - but it is not a registration failure for this line either.
+      return true;
+    }
+    return run_on_pjsip<bool>(
+        [this, line]() {
+          std::lock_guard<std::mutex> lock(mutex_);
+          release_line_account(line.id, true);
+          return true;
+        },
+        // A job that never ran cannot have failed, and nothing about a disabled
+        // line is a registration failure: that is the whole point of this branch.
+        true);
+  }
   if (!running_.load()) {
     if (error != nullptr) {
       *error = "the SIP engine is not running";
@@ -682,6 +733,7 @@ bool PjsipSipEngine::add_line(const LineConfig& line, std::string* error) {
   return run_on_pjsip<bool>(
       [this, line, error]() -> bool {
         std::lock_guard<std::mutex> lock(mutex_);
+
         const SipAccountConfig* account = account_config(line.sip.account);
         if (account == nullptr) {
           if (error != nullptr) {
@@ -690,19 +742,10 @@ bool PjsipSipEngine::add_line(const LineConfig& line, std::string* error) {
           return false;
         }
 
-        // replace an existing registration for this line
-        const auto existing = lines_.find(line.id);
-        if (existing != lines_.end()) {
-          if (existing->second->account) {
-            try {
-              existing->second->account->shutdown();
-            } catch (const pj::Error&) {
-            }
-          }
-          lines_.erase(existing);
-          std::lock_guard<std::mutex> state_lock(state_mutex_);
-          account_index_.erase(line.id);
-        }
+        // Replace an existing registration for this line.  What it was reporting
+        // stays: pjsua re-sends neither a registration state nor a live call's
+        // status, so an edit must not blank either of them in the UI.
+        release_line_account(line.id, false);
 
         auto context = std::make_unique<LineContext>();
         context->config = line;
@@ -801,22 +844,11 @@ bool PjsipSipEngine::remove_line(int line_id) {
   return run_on_pjsip<bool>(
       [this, line_id] {
         std::lock_guard<std::mutex> lock(mutex_);
+        // A removed line takes its media with it.  A line that is only disabled or
+        // re-registered keeps its port: the port carries the call, and an edit must
+        // not cut the audio of a call it does not end.
         teardown_line_media(line_id);
-        const auto it = lines_.find(line_id);
-        if (it != lines_.end()) {
-          if (it->second->account) {
-            try {
-              it->second->account->shutdown();
-            } catch (const pj::Error&) {
-            }
-          }
-          lines_.erase(it);
-        }
-        std::lock_guard<std::mutex> state_lock(state_mutex_);
-        account_index_.erase(line_id);
-        reg_status_.erase(line_id);
-        call_status_.erase(line_id);
-        call_connected_at_ms_.erase(line_id);
+        release_line_account(line_id, true);
         return true;
       },
       false);

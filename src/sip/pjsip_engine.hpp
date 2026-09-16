@@ -96,6 +96,10 @@ class PjsipSipEngine : public SipEngine {
   /** Creates/connects (or destroys) the AES67 media port of a line. */
   void setup_line_media(int line_id);
   void teardown_line_media(int line_id);
+  /** Releases a line's account, and with `forget_status` everything reported from
+   * it.  Runs on the pjsip thread with `mutex_` held (see the threading note
+   * above). */
+  void release_line_account(int line_id, bool forget_status);
   void set_codec_priorities();
   std::string local_aor(const LineConfig& line) const;
   const SipAccountConfig* account_config(const std::string& id) const;

@@ -144,7 +144,9 @@ export default function Dashboard() {
           bodyClass="flush"
         >
           {accounts.length === 0 ? (
-            <div className="empty">No SIP accounts configured.</div>
+            <div className="empty">
+              No enabled line or conference leg registers through a SIP account.
+            </div>
           ) : (
             <table className="table">
               <thead>

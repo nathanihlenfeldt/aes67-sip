@@ -121,6 +121,11 @@ intercom use case:
   and what it hears is those lines' members summed at their contribution levels. Disabled
   by default; `target` must be set when it is enabled, and `GET /api/status` reports the
   leg's call state and levels under `conference`.
+- Lines ship **disabled** in the sample configuration: enable the ones the site runs
+  (`"enabled": true`), give each its own `sip.extension`, and give each a `sip.dial_target`,
+  because every enabled line registers its own `sip.extension` through its account and a
+  `permanent` line dials nothing without a target - a fresh appliance should not try to
+  register extensions nobody has created yet.
 - One AES67 **channel per line** (`aes67.channels: [n]`) and one call per channel.
 - `aes67.codec` is the RTP payload our **source** advertises: **`L24` by default**
   (Dante and most AES67 devices), or `L16`/`L2432`/`AM824`/`L32`. The sink's payload

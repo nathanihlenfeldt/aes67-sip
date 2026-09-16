@@ -721,7 +721,9 @@ cat <<EOF
 Next steps
   1. Edit ${CONFIG_FILE}: set accounts[].registrar/username/password, each line's
      sip.extension and sip.dial_target (the PBX conference), and call_mode
-     ("permanent" for a call that stays up).
+     ("permanent" for a call that stays up).  The sample's lines are disabled: enable
+     the ones this site runs.  A registrar needs its scheme - "sip:10.0.0.5", not
+     "10.0.0.5" - or pjsip refuses the account with an Invalid URI.
   2. Confirm PTP is locked - audio only flows while the RAVENNA device is clocked:
        curl -s http://127.0.0.1:8080/api/ptp/status
      (if there is no grandmaster on the VLAN, run one: ptp4l -i <iface> -m -l7 -E -S)

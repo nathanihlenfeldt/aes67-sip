@@ -189,6 +189,13 @@ registered, `401` credentials rejected, `403` refused by the PBX, `408` no answe
 `502` the registrar name could not be resolved. `sip.accounts[].error` keeps the
 reason of the last failure (it is not cleared by a later empty update).
 
+`sip.accounts` lists the accounts **something enabled registers through** - an enabled
+line, or the enabled conference leg: its state is the worst state of those, so a site
+that has enabled neither reports no entry at all, and an empty array here means "nothing
+is registering", not "the account block is missing from the configuration". A disabled
+line contributes nothing: it registers nothing, so there is no state of its own to roll
+up.
+
 `aes67.sdp_source` says where the line's sink SDP came from: `pasted` (from
 `aes67.remote_sdp`) or `discovered` (from SAP/mDNS) bridge the real endpoint;
 `loopback` means `aes67.commissioning_loopback` is on and the sink is subscribed

@@ -19,6 +19,11 @@ if(AES67_SIP_PJSIP_RPATH)
     INSTALL_RPATH "${AES67_SIP_PJSIP_RPATH}")
 endif()
 
+# One test reads the configuration this repository ships, so it needs the source
+# directory it lives in (test_config.cpp's sample test).
+target_compile_definitions(aes67-sip-tests PRIVATE
+  AES67_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 add_test(NAME aes67-sip-tests COMMAND aes67-sip-tests)
 
 # The gateway can also be smoke tested end to end from the command line:
@@ -26,4 +31,11 @@ add_test(NAME aes67-sip-tests COMMAND aes67-sip-tests)
 add_test(NAME config-validate
   COMMAND aes67-sip -c ${CMAKE_SOURCE_DIR}/config/aes67-sip.dev.conf --validate)
 set_tests_properties(config-validate PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# The sample `install.sh` copies to /etc/aes67-sip.conf is configuration a fresh
+# appliance runs with, so it has to stay a configuration this build accepts.
+add_test(NAME config-validate-sample
+  COMMAND aes67-sip -c ${CMAKE_SOURCE_DIR}/config/aes67-sip.conf --validate)
+set_tests_properties(config-validate-sample PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

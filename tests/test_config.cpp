@@ -140,6 +140,29 @@ TEST_CASE(config_endpoint_streams_round_trip) {
   CHECK(minimal.endpoints[0].aes67.auto_create_streams);
 }
 
+TEST_CASE(config_sample_ships_its_lines_disabled) {
+  // The sample's shape is a promise to a fresh appliance: an enabled line registers
+  // its sip.extension through the account, and a fresh site has not created those
+  // extensions.  The behaviour that keeps such a line away from pjsua lives in
+  // PjsipSipEngine::add_line, which no test here can execute - the suite runs the
+  // stub engine - so that half is verified on the appliance.
+  const std::string path = std::string(AES67_SOURCE_DIR) + "/config/aes67-sip.conf";
+  Config sample;
+  std::string error;
+  CHECK(Config::load(path, &sample, &error));
+  CHECK(error.empty());
+  CHECK(!sample.lines.empty());
+
+  size_t enabled = 0;
+  for (const auto& line : sample.lines) {
+    if (line.enabled) {
+      ++enabled;
+    }
+  }
+  CHECK_EQ(enabled, 0U);
+  CHECK(!sample.conference.enabled);
+}
+
 TEST_CASE(config_conference_block_round_trip) {
   // Absent means disabled, so a configuration that does not mention the leg keeps
   // the behaviour it had before the block existed.
