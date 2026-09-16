@@ -57,6 +57,13 @@ double linear_to_dbfs(double amplitude) {
   return 20.0 * std::log10(amplitude);
 }
 
+double hold_peak(double previous, double current, double decay_db) {
+  if (current >= previous) {
+    return current;
+  }
+  return std::max(current, previous - decay_db);
+}
+
 double db_to_linear(double db) {
   return std::pow(10.0, db / 20.0);
 }

@@ -146,6 +146,45 @@ struct LineConfig {
 };
 
 /**
+ * An endpoint on the site, and the shape it presents to the matrix.
+ *
+ * Nothing here names a device model: an endpoint says how many talk channels it
+ * sends and how many listen channels it receives, and the channels are the
+ * RAVENNA/ALSA channels those map onto. A two-channel beltpack and a console with
+ * many channels are the same thing to the matrix, differing only in these counts.
+ */
+struct EndpointConfig {
+  std::string id;                         // stable key that party lines refer to
+  std::string name;                       // defaults to the id
+  std::vector<unsigned> talk_channels;    // device capture channels, one each
+  std::vector<unsigned> listen_channels;  // device playback channels, one each
+};
+
+/**
+ * One endpoint's place on a party line.
+ *
+ * `talk_channel` and `listen_channel` index the endpoint's own declared channels
+ * rather than device channels, and either may be absent (-1): an endpoint can hear
+ * a line without talking on it, or talk without hearing it. `contribution_db`
+ * trims what the others hear and never changes what this endpoint hears; `mute`
+ * stops it being heard entirely without removing it from the line.
+ */
+struct PartyLineMemberConfig {
+  std::string endpoint;
+  int talk_channel{-1};
+  int listen_channel{-1};
+  double contribution_db{0.0};
+  bool mute{false};
+};
+
+/** A named bus with a set of members. */
+struct PartyLineConfig {
+  std::string id;
+  std::string name;  // defaults to the id
+  std::vector<PartyLineMemberConfig> members;
+};
+
+/**
  * Full gateway configuration.  Serialised 1:1 to the JSON config file
  * (see config/aes67-sip.conf) and to `GET/POST /api/config`.
  */
@@ -160,6 +199,9 @@ struct Config {
   SipConfig sip;
   std::vector<SipAccountConfig> accounts;
   std::vector<LineConfig> lines;
+  /** The intercom matrix: the site's endpoints and the party lines they share. */
+  std::vector<EndpointConfig> endpoints;
+  std::vector<PartyLineConfig> party_lines;
 
   json to_json() const;
   static Config from_json(const json& document);

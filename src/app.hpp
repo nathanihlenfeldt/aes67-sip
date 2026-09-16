@@ -11,6 +11,7 @@
 #include "bridge/line_manager.hpp"
 #include "config.hpp"
 #include "http/api_server.hpp"
+#include "matrix/intercom_matrix.hpp"
 #include "sip/engine.hpp"
 #include "util.hpp"
 
@@ -65,6 +66,7 @@ class App {
   std::unique_ptr<DaemonClient> daemon_;
   std::unique_ptr<AudioBackend> backend_;
   std::unique_ptr<AudioRouter> router_;
+  std::unique_ptr<IntercomMatrix> matrix_;
   std::unique_ptr<LineManager> lines_;
   std::unique_ptr<SipEngine> engine_;
   std::unique_ptr<ApiServer> api_;

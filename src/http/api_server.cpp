@@ -152,7 +152,28 @@ json ApiServer::build_status() const {
   status["sip"] = sip;
 
   status["lines"] = lines_->lines_status();
+  status["party_lines"] = party_lines_status();
   return status;
+}
+
+json ApiServer::party_lines_status() const {
+  json lines = json::array();
+  if (matrix_ == nullptr) {
+    return lines;
+  }
+  for (const auto& line : matrix_->status()) {
+    json members = json::array();
+    for (const auto& member : line.members) {
+      members.push_back(json{{"endpoint", member.endpoint},
+                             {"name", member.endpoint_name},
+                             {"contribution_db", member.contribution_db},
+                             {"level_dbfs", member.level_dbfs},
+                             {"arriving", member.arriving}});
+    }
+    lines.push_back(
+        json{{"id", line.id}, {"name", line.name}, {"members", members}});
+  }
+  return lines;
 }
 
 // ---------------------------------------------------------------------------

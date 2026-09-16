@@ -16,9 +16,6 @@ namespace aes67sip {
 
 namespace {
 
-constexpr double kSilenceDbfs = -1000.0;
-constexpr double kPeakDecayDbPerMs = 0.5;
-
 double interleaved_rms_dbfs(const float* data, unsigned frames, unsigned stride,
                             unsigned offset) {
   double sum = 0.0;
@@ -35,14 +32,6 @@ double peak_dbfs(const float* data, size_t count) {
     peak = std::max(peak, std::fabs(static_cast<double>(data[i])));
   }
   return linear_to_dbfs(peak);
-}
-
-/** Peak hold with a fixed decay rate so the meters stay readable in the UI. */
-double hold_peak(double previous, double current, double decay_db) {
-  if (current >= previous) {
-    return current;
-  }
-  return std::max(current, previous - decay_db);
 }
 
 }  // namespace
@@ -412,6 +401,14 @@ void AudioRouter::process_block() {
       playback_peak = peak_dbfs(line.upsampled.data(), count);
     }
     line.to_aes67_db = hold_peak(line.to_aes67_db.load(), playback_peak, decay_db);
+  }
+
+  // The intercom matrix writes the channels its party lines own, built from the
+  // captured channels.  It runs after the SIP-facing lines so that its channels
+  // are the ones it mixes, and before clipping and metering so that its output is
+  // limited and measured like everything else.
+  if (matrix_ != nullptr) {
+    matrix_->process(capture_.data(), playback_.data(), channels, frames);
   }
 
   for (float& sample : playback_) {

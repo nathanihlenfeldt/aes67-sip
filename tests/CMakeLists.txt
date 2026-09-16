@@ -4,6 +4,7 @@
 add_executable(aes67-sip-tests
   test_main.cpp
   test_config.cpp
+  test_matrix.cpp
   test_audio.cpp
   test_daemon_client.cpp
   test_gateway.cpp)

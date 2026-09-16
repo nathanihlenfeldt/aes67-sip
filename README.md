@@ -196,6 +196,7 @@ build, tests, script syntax) with `./scripts/check.sh` before committing.
 
 ```
 src/audio/    RAVENNA/ALSA + null backends, polyphase resampler, lock-free rings, router
+src/matrix/   the intercom matrix: party lines, endpoints and their mixes
 src/aes67/    aes67-daemon REST client (+ an in-process simulation for development)
 src/sip/      SipEngine interface, PJSIP engine, custom pjsua2 audio port, stub engine
 src/bridge/   line manager: stream provisioning, call modes, supervision, meters

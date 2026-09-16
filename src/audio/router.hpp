@@ -12,6 +12,7 @@
 #include "audio/backend.hpp"
 #include "audio/resampler.hpp"
 #include "audio/ring.hpp"
+#include "matrix/intercom_matrix.hpp"
 
 namespace aes67sip {
 
@@ -68,6 +69,12 @@ class AudioRouter {
   bool start(std::string* error);
   void stop();
   bool running() const { return running_.load(); }
+
+  /**
+   * Attaches the intercom matrix, which then mixes the party lines inside the
+   * same audio block.  Optional: a gateway with no matrix behaves as before.
+   */
+  void attach_matrix(IntercomMatrix* matrix) { matrix_ = matrix; }
 
   /** Why the audio path is not running (empty when it is healthy). */
   std::string last_error() const;
@@ -172,6 +179,8 @@ class AudioRouter {
 
   AudioBackend* backend_;
   AudioFormat format_;
+  /** The party lines, when the intercom matrix is in use (may be null). */
+  IntercomMatrix* matrix_{nullptr};
 
   mutable std::mutex mutex_;
   std::unordered_map<int, std::shared_ptr<Line>> lines_;

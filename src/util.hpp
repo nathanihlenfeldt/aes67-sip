@@ -26,6 +26,15 @@ double linear_to_dbfs(double amplitude);
 /** Linear gain from a dB value. */
 double db_to_linear(double db);
 
+/** Level of a silent channel in dBFS: the floor every meter holds at. */
+constexpr double kSilenceDbfs = -1000.0;
+
+/** Peak hold decay for level meters, in dB per millisecond. */
+constexpr double kPeakDecayDbPerMs = 0.5;
+
+/** Peak hold with a fixed decay, so the meters stay readable in the UI. */
+double hold_peak(double previous, double current, double decay_db);
+
 /** JSON helper: value of `key` if present and of a convertible type, else `def`. */
 template <typename T>
 T json_get(const json& object, const char* key, const T& def) {

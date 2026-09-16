@@ -95,6 +95,24 @@ Single poll endpoint used by the UI.
 `state` is one of `disabled`, `idle`, `dialing`, `ringing`, `in_call`, `error`.
 Levels are dBFS floats; silence is serialised as `null`.
 
+`party_lines[]` reports the intercom matrix: each party line with its members, and
+for each member the endpoint that owns it, that member's contribution level, the
+held level of its audio and whether that audio is currently arriving. It is an empty
+array when no party lines are declared, which is also how a gateway that only
+bridges SIP lines reports itself.
+
+```json
+"party_lines": [
+  { "id": "cameras", "name": "Cameras",
+    "members": [
+      { "endpoint": "a", "name": "Camera 1", "contribution_db": 0.0,
+        "level_dbfs": -6.0, "arriving": true },
+      { "endpoint": "b", "name": "Camera 2", "contribution_db": -3.0,
+        "level_dbfs": -1000.0, "arriving": false }
+    ] }
+]
+```
+
 `audio.error` is empty while the audio path is healthy. When the RAVENNA device
 cannot be opened it holds the reason and `audio.state` is `stopped`; the gateway
 keeps serving this API (and retries the audio path every 5 s) instead of exiting,

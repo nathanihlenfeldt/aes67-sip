@@ -306,6 +306,22 @@ bool LineManager::apply_configuration(std::string* error) {
     }
     configure_daemon_streams(line);
   }
+  // The intercom matrix is configured from the same document: endpoints declare
+  // their shape and party lines name their members.  A matrix that cannot be
+  // applied is an error, not a warning: a mistyped binding would otherwise leave
+  // a department silent while the gateway reported success.
+  if (matrix_ != nullptr) {
+    MatrixPlan plan;
+    std::string matrix_error;
+    if (!IntercomMatrix::plan_from_config(*config_, &plan, &matrix_error) ||
+        !matrix_->configure(plan, &matrix_error)) {
+      if (error != nullptr) {
+        *error = matrix_error;
+      }
+      return false;
+    }
+  }
+
   LOG_INFO("configuration applied: ", lines.size(), " line(s), SIP engine ",
            engine_->engine_name());
   return true;

@@ -10,6 +10,7 @@
 #include "audio/router.hpp"
 #include "bridge/line_manager.hpp"
 #include "config.hpp"
+#include "matrix/intercom_matrix.hpp"
 #include "sip/engine.hpp"
 #include "util.hpp"
 
@@ -38,6 +39,9 @@ class ApiServer {
 
   void set_restart_handler(RestartHandler handler);
 
+  /** Attaches the intercom matrix so `/api/status` can report the party lines. */
+  void attach_matrix(IntercomMatrix* matrix) { matrix_ = matrix; }
+
   bool start(std::string* error);
   void stop();
 
@@ -46,6 +50,8 @@ class ApiServer {
  private:
   void register_routes();
   json build_status() const;
+  /** The party lines, as `status.party_lines[]`. */
+  json party_lines_status() const;
 
   Config* config_{nullptr};
   std::string config_path_;
@@ -53,6 +59,7 @@ class ApiServer {
   AudioRouter* router_{nullptr};
   LineManager* lines_{nullptr};
   SipEngine* engine_{nullptr};
+  IntercomMatrix* matrix_{nullptr};
 
   RestartHandler restart_;
   std::unique_ptr<httplib::Server> server_;

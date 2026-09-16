@@ -12,17 +12,18 @@
 #include "aes67/daemon_client.hpp"
 #include "audio/router.hpp"
 #include "config.hpp"
+#include "matrix/intercom_matrix.hpp"
 #include "sip/engine.hpp"
 
 namespace aes67sip {
 
 /**
- * Owns the runtime state of every configured line and ties the three planes
- * together:
+ * Owns the runtime state of every configured line and ties the planes together:
  *
  *   configuration -> AES67 daemon streams (sink/source per line)
  *                 -> audio router (channels, gains, PTT detection)
  *                 -> SIP engine (one account per line, registration, calls)
+ *                 -> the intercom matrix (endpoints and party lines)
  *
  * It also implements the call state machine for the different call modes
  * (`manual`, `auto_answer`, `dial_out`, `ptt`).
@@ -42,6 +43,13 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
    * both objects exist.
    */
   void attach_engine(SipEngine* engine) { engine_ = engine; }
+
+  /**
+   * Connects the intercom matrix, which `apply_configuration` then fills from the
+   * configuration's endpoints and party lines.  Optional: without it the gateway
+   * only bridges its SIP lines, as before.
+   */
+  void attach_matrix(IntercomMatrix* matrix) { matrix_ = matrix; }
 
   /** Starts the line supervision thread (dial_out / ptt / auto answer). */
   bool start_supervision();
@@ -130,6 +138,7 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
   DaemonClient* daemon_{nullptr};
   AudioRouter* router_{nullptr};
   SipEngine* engine_{nullptr};
+  IntercomMatrix* matrix_{nullptr};
 
   /** Our own daemon's node_id: a sink SDP carrying it is our own source. */
   std::string own_node_id_;

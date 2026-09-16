@@ -116,9 +116,16 @@ bool App::initialise(std::string* error) {
   format.period_frames = config_.audio.period_frames;
   router_ = std::make_unique<AudioRouter>(backend_.get(), format);
 
+  // ---- intercom matrix ---------------------------------------------------
+  // The party lines live beside the SIP-facing lines: the matrix mixes them in
+  // the same audio block and knows nothing about SIP (ADR-0001).
+  matrix_ = std::make_unique<IntercomMatrix>(config_.audio.sample_rate);
+  router_->attach_matrix(matrix_.get());
+
   // ---- lines (need a SIP engine, which needs the line manager) -----------
   lines_ = std::make_unique<LineManager>(&config_, config_path_, daemon_.get(),
                                          router_.get(), nullptr);
+  lines_->attach_matrix(matrix_.get());
   if (!config_.lines.empty() && config_.audio.channels < config_.lines.size()) {
     LOG_WARN("only ", config_.audio.channels, " RAVENNA channels for ",
              config_.lines.size(),
@@ -149,6 +156,7 @@ bool App::initialise(std::string* error) {
   // ---- REST API + web UI -------------------------------------------------
   api_ = std::make_unique<ApiServer>(&config_, config_path_, daemon_.get(),
                                      router_.get(), lines_.get(), engine_.get());
+  api_->attach_matrix(matrix_.get());
   api_->set_restart_handler(
       [this](std::string* restart_error) { return restart(restart_error); });
 

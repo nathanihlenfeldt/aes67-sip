@@ -117,6 +117,7 @@ set(AES67_SIP_SOURCES
   src/audio/resampler.cpp
   src/audio/router.cpp
   src/aes67/daemon_client.cpp
+  src/matrix/intercom_matrix.cpp
   src/sip/engine.cpp
   src/bridge/line_manager.cpp
   src/http/api_server.cpp)

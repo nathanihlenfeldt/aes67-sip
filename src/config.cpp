@@ -69,6 +69,66 @@ json line_to_json(const LineConfig& line) {
               {"sip", sip}};
 }
 
+// ---------------------------------------------------------------------------
+// the intercom matrix
+// ---------------------------------------------------------------------------
+
+json endpoint_to_json(const EndpointConfig& endpoint) {
+  return json{{"id", endpoint.id},
+              {"name", endpoint.name},
+              {"talk_channels", endpoint.talk_channels},
+              {"listen_channels", endpoint.listen_channels}};
+}
+
+EndpointConfig endpoint_from_json(const json& document) {
+  EndpointConfig endpoint;
+  endpoint.id = json_get<std::string>(document, "id", "");
+  endpoint.name = json_get<std::string>(document, "name", "");
+  endpoint.talk_channels =
+      json_get<std::vector<unsigned>>(document, "talk_channels", {});
+  endpoint.listen_channels =
+      json_get<std::vector<unsigned>>(document, "listen_channels", {});
+  return endpoint;
+}
+
+json party_line_member_to_json(const PartyLineMemberConfig& member) {
+  return json{{"endpoint", member.endpoint},
+              {"talk_channel", member.talk_channel},
+              {"listen_channel", member.listen_channel},
+              {"contribution_db", member.contribution_db},
+              {"mute", member.mute}};
+}
+
+PartyLineMemberConfig party_line_member_from_json(const json& document) {
+  PartyLineMemberConfig member;
+  member.endpoint = json_get<std::string>(document, "endpoint", "");
+  member.talk_channel = json_get<int>(document, "talk_channel", -1);
+  member.listen_channel = json_get<int>(document, "listen_channel", -1);
+  member.contribution_db = json_get<double>(document, "contribution_db", 0.0);
+  member.mute = json_get<bool>(document, "mute", false);
+  return member;
+}
+
+json party_line_to_json(const PartyLineConfig& line) {
+  json members = json::array();
+  for (const auto& member : line.members) {
+    members.push_back(party_line_member_to_json(member));
+  }
+  return json{{"id", line.id}, {"name", line.name}, {"members", members}};
+}
+
+PartyLineConfig party_line_from_json(const json& document) {
+  PartyLineConfig line;
+  line.id = json_get<std::string>(document, "id", "");
+  line.name = json_get<std::string>(document, "name", "");
+  if (json_has(document, "members")) {
+    for (const auto& entry : document.at("members")) {
+      line.members.push_back(party_line_member_from_json(entry));
+    }
+  }
+  return line;
+}
+
 /** Fills in the defaults that keep hand written config files short. */
 void apply_line_defaults(LineConfig* line) {
   if (line->name.empty()) {
@@ -293,6 +353,20 @@ Config Config::from_json(const json& document) {
     }
   }
 
+  if (json_has(document, "endpoints")) {
+    config.endpoints.clear();
+    for (const auto& entry : document.at("endpoints")) {
+      config.endpoints.push_back(endpoint_from_json(entry));
+    }
+  }
+
+  if (json_has(document, "party_lines")) {
+    config.party_lines.clear();
+    for (const auto& entry : document.at("party_lines")) {
+      config.party_lines.push_back(party_line_from_json(entry));
+    }
+  }
+
   // keep a usable configuration even when the file only overrides a few keys
   if (config.accounts.empty()) {
     config.accounts.push_back(SipAccountConfig{});
@@ -353,11 +427,23 @@ json Config::to_json() const {
     lines_json.push_back(line_to_json(line));
   }
 
-  return json{{"log_severity", log_severity},     {"http_addr", http_addr},
-              {"http_port", http_port},           {"webui_dir", webui_dir},
-              {"webui_api_auth", webui_api_auth}, {"audio", audio_json},
-              {"aes67_daemon", daemon_json},      {"sip", sip_json},
-              {"accounts", accounts_json},        {"lines", lines_json}};
+  json endpoints_json = json::array();
+  for (const auto& endpoint : endpoints) {
+    endpoints_json.push_back(endpoint_to_json(endpoint));
+  }
+
+  json party_lines_json = json::array();
+  for (const auto& line : party_lines) {
+    party_lines_json.push_back(party_line_to_json(line));
+  }
+
+  return json{
+      {"log_severity", log_severity},     {"http_addr", http_addr},
+      {"http_port", http_port},           {"webui_dir", webui_dir},
+      {"webui_api_auth", webui_api_auth}, {"audio", audio_json},
+      {"aes67_daemon", daemon_json},      {"sip", sip_json},
+      {"accounts", accounts_json},        {"lines", lines_json},
+      {"endpoints", endpoints_json},      {"party_lines", party_lines_json}};
 }
 
 // ---------------------------------------------------------------------------

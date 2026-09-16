@@ -48,12 +48,21 @@ struct Gateway {
   std::unique_ptr<DaemonClient> daemon;
   std::unique_ptr<AudioBackend> backend;
   std::unique_ptr<AudioRouter> router;
+  std::unique_ptr<IntercomMatrix> matrix;
   std::unique_ptr<LineManager> lines;
   std::unique_ptr<SipEngine> engine;
   std::unique_ptr<ApiServer> api;
   std::string error;
 
-  explicit Gateway(bool with_sip = true) {
+  /**
+   * `tweak` runs before anything is built, which is how a test declares endpoints
+   * and party lines.  A null tweak leaves the default single-line gateway.
+   */
+  explicit Gateway(bool with_sip = true,
+                   const std::function<void(Config&)>& tweak = {}) {
+    if (tweak) {
+      tweak(config);
+    }
     if (with_sip) {
       config.sip.enabled = true;
     }
@@ -64,12 +73,16 @@ struct Gateway {
     format.channels = config.audio.channels;
     format.period_frames = config.audio.period_frames;
     router = std::make_unique<AudioRouter>(backend.get(), format);
+    matrix = std::make_unique<IntercomMatrix>(config.audio.sample_rate);
+    router->attach_matrix(matrix.get());
     lines = std::make_unique<LineManager>(&config, kTestConfigPath, daemon.get(),
                                           router.get(), nullptr);
+    lines->attach_matrix(matrix.get());
     engine = SipEngine::create(config.sip, lines.get(), lines.get(), &error);
     lines->attach_engine(engine.get());
     api = std::make_unique<ApiServer>(&config, kTestConfigPath, daemon.get(),
                                       router.get(), lines.get(), engine.get());
+    api->attach_matrix(matrix.get());
   }
 
   bool start() {
@@ -133,6 +146,97 @@ json get_json(httplib::Client& client, const std::string& path,
 }
 
 }  // namespace
+
+namespace {
+
+/**
+ * The reference deployment's shape: two single-pair endpoints sharing one party
+ * line, each declaring its own channels rather than being assumed.
+ */
+Config party_line_config() {
+  Config config = test_config();
+  EndpointConfig first;
+  first.id = "a";
+  first.name = "Camera 1";
+  first.talk_channels = {0};
+  first.listen_channels = {1};
+  EndpointConfig second;
+  second.id = "b";
+  second.name = "Camera 2";
+  second.talk_channels = {1};
+  second.listen_channels = {0};
+  config.endpoints = {first, second};
+
+  PartyLineConfig line;
+  line.id = "cameras";
+  line.name = "Cameras";
+  PartyLineMemberConfig first_member;
+  first_member.endpoint = "a";
+  first_member.talk_channel = 0;
+  first_member.listen_channel = 0;
+  first_member.contribution_db = -3.0;
+  PartyLineMemberConfig second_member;
+  second_member.endpoint = "b";
+  second_member.talk_channel = 0;
+  second_member.listen_channel = 0;
+  line.members = {first_member, second_member};
+  config.party_lines = {line};
+  return config;
+}
+
+/** The status entry for one member of one party line. */
+json member_status(const json& status, size_t line_index, size_t member_index) {
+  return status.at("party_lines")[line_index].at("members")[member_index];
+}
+
+}  // namespace
+
+TEST_CASE(rest_api_reports_party_lines_and_their_members) {
+  Gateway gateway(true, [](Config& config) { config = party_line_config(); });
+  CHECK(gateway.start());
+
+  // The mixes are fed from the audio thread, and the simulated device carries a
+  // tone on every channel, so both members must report as arriving.  This walks
+  // the whole path: configuration -> matrix -> audio thread -> status contract.
+  const bool reported = gateway.wait_for([](const json& status) {
+    if (!status.contains("party_lines") || status.at("party_lines").empty()) {
+      return false;
+    }
+    const json& members = status.at("party_lines")[0].at("members");
+    return members.size() == 2 && members[0].at("arriving").get<bool>() &&
+           members[1].at("arriving").get<bool>();
+  });
+  CHECK(reported);
+
+  httplib::Client client("127.0.0.1", kTestPort);
+  const json status = get_json(client, "/api/status");
+  const json& line = status.at("party_lines")[0];
+  CHECK_EQ(line.at("id").get<std::string>(), std::string("cameras"));
+  CHECK_EQ(line.at("name").get<std::string>(), std::string("Cameras"));
+  CHECK_EQ(line.at("members").size(), 2U);
+
+  const json first = member_status(status, 0, 0);
+  CHECK_EQ(first.at("endpoint").get<std::string>(), std::string("a"));
+  CHECK_EQ(first.at("name").get<std::string>(), std::string("Camera 1"));
+  // The contribution level travels configuration -> plan -> status untouched.
+  CHECK_NEAR(first.at("contribution_db").get<double>(), -3.0, 1e-9);
+  CHECK(first.at("level_dbfs").get<double>() > -60.0);
+
+  gateway.stop();
+}
+
+TEST_CASE(rest_api_reports_no_party_lines_when_none_are_configured) {
+  Gateway gateway;
+  CHECK(gateway.start());
+
+  httplib::Client client("127.0.0.1", kTestPort);
+  const json status = get_json(client, "/api/status");
+  // Additive: a site with no endpoints and no party lines still gets the key.
+  CHECK(status.contains("party_lines"));
+  CHECK_EQ(status.at("party_lines").size(), 0U);
+
+  gateway.stop();
+}
 
 TEST_CASE(line_manager_reaches_configured_state) {
   Gateway gateway;
