@@ -652,6 +652,9 @@ void LineManager::supervise() {
 
         std::lock_guard<std::mutex> lock(line.mutex);
         line.sink_receiving = ok && sink.receiving_rtp_packet;
+        if (ok) {
+          line.sink_in_use = sink.in_use;
+        }
         line.sink_error = ok && (sink.rtp_seq_id_error || sink.rtp_ssrc_error ||
                                  sink.rtp_payload_type_error || sink.rtp_sac_error);
         if (!sink_sdp.empty()) {
@@ -810,6 +813,7 @@ json LineManager::line_status(int line_id) const {
   int state_code = 0;
   std::string detail;
   bool receiving = false;
+  bool sink_in_use = true;
   bool sink_error = false;
   std::string sdp_source{"none"};
   {
@@ -825,6 +829,7 @@ json LineManager::line_status(int line_id) const {
     state_code = line.state_code;
     detail = line.detail;
     receiving = line.sink_receiving;
+    sink_in_use = line.sink_in_use;
     sink_error = line.sink_error;
     sdp_source = line.sdp_source;
   }
@@ -853,6 +858,9 @@ json LineManager::line_status(int line_id) const {
   aes67["source_id"] = config.aes67.source_id;
   aes67["channels"] = config.aes67.channels;
   aes67["receiving"] = receiving;
+  // No stream on the sink at all is a configuration gap, not a daemon failure: the
+  // difference between "nothing is arriving" and "there is nothing to arrive on".
+  aes67["sink_in_use"] = sink_in_use;
   aes67["error"] = sink_error;
   // Where the sink's SDP came from: "pasted" or "discovered" bridge the real
   // endpoint; "loopback" means the sink is subscribed to our own source (a
@@ -1323,6 +1331,8 @@ json LineManager::self_test() {
         json_get_path<double>(status, {"levels", "sip_rx_dbfs"}, -1000.0);
     const std::string sdp_source =
         json_get_path<std::string>(status, {"aes67", "sdp_source"}, "none");
+    const bool sink_in_use =
+        json_get_path<bool>(status, {"aes67", "sink_in_use"}, true);
 
     // Only expect an endpoint SDP when this gateway is supposed to create the
     // streams: a line with auto_create_streams=false is wired up by hand and must
@@ -1336,8 +1346,17 @@ json LineManager::self_test() {
     std::ostringstream detail;
     detail << state;
     if (enabled && !receiving) {
-      detail << ", no RTP from the endpoint (check the sink SDP, the multicast "
-                "group and PTP lock)";
+      if (!sink_in_use) {
+        // There is nothing to receive on, which is a different problem from a
+        // stream that is configured but silent - and is not the daemon's fault.
+        detail << ", the daemon has no stream on sink "
+               << (line_config != nullptr ? line_config->aes67.sink_id : 0)
+               << " yet (pick or paste the endpoint SDP, or wire it up outside the "
+                  "gateway)";
+      } else {
+        detail << ", no RTP from the endpoint (check the sink SDP, the multicast "
+                  "group and PTP lock)";
+      }
     } else if (capture > -999.0) {
       detail << ", AES67 input " << static_cast<int>(capture) << " dBFS";
     }

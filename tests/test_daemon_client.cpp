@@ -88,6 +88,35 @@ TEST_CASE(endpoint_stream_names_fall_back_to_the_endpoint_id) {
            std::string("endpoint (talk)"));
 }
 
+TEST_CASE(a_stream_the_daemon_has_no_stream_for_is_not_a_failure) {
+  // The daemon answers 400/404 on its per-stream paths for a sink or source it has
+  // no stream for.  That is a normal state - a hand-wired stream, or one whose SDP
+  // is not configured yet - and treating it as a failure made the gateway report
+  // the daemon as erroring and unreachable every couple of seconds.
+  CHECK(DaemonClient::stream_absent(400));  // "stream not in use"
+  CHECK(DaemonClient::stream_absent(404));
+  CHECK(!DaemonClient::stream_absent(200));
+  CHECK(!DaemonClient::stream_absent(500));
+  CHECK(!DaemonClient::stream_absent(0));  // no response at all *is* a failure
+
+  // The simulated daemon reports the same distinction the rule encodes: a sink that
+  // was put into it is in use, one that was not is not - and neither is an error.
+  auto daemon = DaemonClient::create(fake_daemon_config());
+  std::string error;
+  SinkStatus absent;
+  CHECK(daemon->get_sink_status(3, &absent, &error));
+  CHECK(!absent.in_use);
+  CHECK(!absent.receiving_rtp_packet);
+  CHECK(daemon->last_error().empty());
+  CHECK(daemon->connected());
+
+  CHECK(daemon->put_sink(3, json{{"name", "test sink"}}, &error));
+  SinkStatus present;
+  CHECK(daemon->get_sink_status(3, &present, &error));
+  CHECK(present.in_use);
+  CHECK(present.receiving_rtp_packet);
+}
+
 TEST_CASE(fake_daemon_reports_ptp_and_version) {
   auto daemon = DaemonClient::create(fake_daemon_config());
   CHECK(daemon != nullptr);

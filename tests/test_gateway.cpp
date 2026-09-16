@@ -1579,6 +1579,40 @@ TEST_CASE(rest_api_refuses_a_tone_on_a_line_with_no_channel_on_the_device) {
   ok.stop();
 }
 
+TEST_CASE(rest_api_does_not_blame_the_daemon_for_a_sink_without_a_stream) {
+  // The gateway polls each line's daemon sink every couple of seconds.  A real
+  // daemon answers 400 "stream not in use" for a sink it has no stream for, so the
+  // status must say *that* rather than surfacing a daemon error - which is what the
+  // front end flashed - and must not report the daemon as unreachable.
+  Gateway gateway(true, [](Config& config) { config = party_line_config(); });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  // The fixture's line has a sink id the daemon has nothing on (no endpoint SDP is
+  // configured, so no sink was created).
+  CHECK(gateway.wait_for(
+      [](const json& status) {
+        const json& line = status.at("lines")[0].at("aes67");
+        return line.contains("sink_in_use") && !line.at("sink_in_use").get<bool>();
+      },
+      4000));
+  const json status = get_json(client, "/api/status");
+  CHECK(status.at("aes67").at("connected").get<bool>());
+  CHECK(status.at("aes67").at("error").get<std::string>().empty());
+  CHECK(!status.at("lines")[0].at("aes67").at("receiving").get<bool>());
+
+  // ...and the self-test says which of the two problems it is: there is nothing to
+  // receive on, rather than a stream that has gone quiet.
+  const json result = run_self_test(client);
+  const json check = self_test_check(result, "line 0 (Stage Left)");
+  CHECK(!check.is_null());
+  CHECK(check.at("detail").get<std::string>().find(
+            "the daemon has no stream on sink") != std::string::npos);
+
+  gateway.stop();
+}
+
 TEST_CASE(rest_api_self_test_reports_checks) {
   Gateway gateway;
   CHECK(gateway.start());

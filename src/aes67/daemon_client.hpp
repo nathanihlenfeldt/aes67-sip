@@ -20,6 +20,13 @@ struct PtpStatus {
 
 /** Per sink RTP reception flags as reported by the daemon. */
 struct SinkStatus {
+  /**
+   * False when the daemon has no stream on this sink at all (nothing subscribed
+   * or configured there) — a normal state for a stream that is hand-wired or not
+   * set up yet, and the difference between "nothing is arriving" and "there is
+   * nothing to arrive on".
+   */
+  bool in_use{true};
   bool receiving_rtp_packet{false};
   bool muted{false};
   bool rtp_seq_id_error{false};
@@ -68,6 +75,18 @@ class DaemonClient {
 
   /** SDP document of a local source, used to wire sinks to our own sources. */
   virtual bool get_source_sdp(int id, std::string* sdp, std::string* error) = 0;
+
+  /**
+   * True when a daemon response means "there is no such stream" rather than a
+   * failure: the daemon answers 400/404 on its per-stream paths
+   * (`/api/sink/status/N`,
+   * `/api/source/sdp/N`) for a sink or source that has no stream yet - a hand-wired
+   * stream, or one whose SDP has not been configured.  That is a normal state and
+   * must not be reported as the daemon being unreachable: the gateway polls sink
+   * status every couple of seconds for every configured line, and blaming the
+   * daemon for the ones it has no stream for made the UI flash a daemon error.
+   */
+  static bool stream_absent(int http_status);
 
   /** kind is one of "all", "mdns", "sap". */
   virtual bool browse_sources(const std::string& kind, json* sources,

@@ -121,6 +121,12 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
     int64_t last_dial_ms{0};
     // cached daemon sink state, refreshed by the supervision thread
     bool sink_receiving{false};
+    /**
+     * False when the daemon has no stream on this line's sink at all — nothing is
+     * configured to receive on.  Distinct from "nothing is arriving": the first is
+     * a configuration gap, the second is a silent or dead endpoint.
+     */
+    bool sink_in_use{true};
     bool sink_error{false};
     int64_t sink_status_at_ms{0};
 

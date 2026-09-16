@@ -67,16 +67,9 @@ Single poll endpoint used by the UI.
   "aes67": {
     "connected": true,
     "address": "127.0.0.1:8080",
+    "fake": false,
     "error": "",
-    "ptp": { "status": "locked", "gmid": "00-10-4B-FF-FE-7A-87-FC", "jitter": 0 },
-    "sinks": [
-      { "id": 0, "name": "Stage Left", "receiving": true, "muted": false,
-        "map": [0, 1], "seq_error": false, "ssrc_error": false, "pt_error": false }
-    ],
-    "sources": [
-      { "id": 0, "name": "Stage Left", "enabled": true, "map": [0, 1],
-        "address": "239.1.0.1", "payload_type": 98 }
-    ]
+    "ptp": { "status": "locked", "gmid": "00-10-4B-FF-FE-7A-87-FC", "jitter": 0 }
   },
   "sip": {
     "engine": "pjsip",
@@ -98,7 +91,7 @@ Single poll endpoint used by the UI.
       "call": { "remote_uri": "sip:1001@pbx.example.com", "duration_sec": 42,
                 "last_error": "" },
       "aes67": { "sink_id": 0, "source_id": 0, "channels": [0], "receiving": true,
-                 "error": false, "sdp_source": "discovered" },
+                 "sink_in_use": true, "error": false, "sdp_source": "discovered" },
       "levels": { "rx_dbfs": -18.2, "tx_dbfs": -60.0,
                   "sip_rx_dbfs": -22.0, "sip_tx_dbfs": -18.2 },
       "gain_db": 0.0,
@@ -109,6 +102,12 @@ Single poll endpoint used by the UI.
   ]
 }
 ```
+
+`aes67.sink_in_use` is false when the daemon has no stream on that line's sink at all: there
+is nothing to receive on, as opposed to `receiving` being false while a stream exists. A
+sink the daemon has not been given a stream for is a configuration gap, not a daemon
+failure, and the gateway never reports it as one (the daemon answers `400`/`404` on its
+per-stream paths for those, which is not an error).
 
 `state` is one of `disabled`, `idle`, `dialing`, `ringing`, `in_call`, `error`.
 Levels are dBFS floats; silence is serialised as `null` (including the meter floor, so a
@@ -175,6 +174,10 @@ support.
     ] }
 ]
 ```
+
+`aes67` reports the daemon's reachability, its last error and the PTP state; the daemon's own
+sink and source documents are served by `GET /api/aes67/sinks` and `GET /api/aes67/sources`
+(they are not copied into this document).
 
 `audio.error` is empty while the audio path is healthy. When the RAVENNA device
 cannot be opened it holds the reason and `audio.state` is `stopped`; the gateway

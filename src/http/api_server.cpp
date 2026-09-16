@@ -502,6 +502,13 @@ void ApiServer::register_routes() {
                reply_error(response, 502, error);
                return;
              }
+             if (trim(sdp).empty()) {
+               // The daemon has no source with that id: a 404 tells the caller what
+               // happened, where an empty 200 would look like an empty SDP.
+               reply_error(response, 404,
+                           "the daemon has no source " + std::to_string(source_id));
+               return;
+             }
              response.status = 200;
              response.set_content(sdp, "application/sdp");
            });

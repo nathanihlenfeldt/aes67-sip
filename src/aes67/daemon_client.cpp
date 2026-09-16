@@ -39,6 +39,14 @@ json parse_or_empty(const std::string& body) {
   }
 }
 
+}  // namespace
+
+bool DaemonClient::stream_absent(int http_status) {
+  return http_status == 400 || http_status == 404;
+}
+
+namespace {
+
 /** Client for a real `aes67-daemon` over its REST API. */
 class HttpDaemonClient : public DaemonClient {
  public:
@@ -121,10 +129,25 @@ class HttpDaemonClient : public DaemonClient {
 
   bool get_sink_status(int id, SinkStatus* status, std::string* error) override {
     json document;
-    if (!get("/api/sink/status/" + std::to_string(id), &document, error)) {
+    auto result = client_.Get("/api/sink/status/" + std::to_string(id));
+    // A sink the daemon has no stream for is not a failure: it answers 400
+    // ("stream not in use") and that is a normal state, which must not be recorded
+    // as the daemon erroring (nor as it being unreachable) - this is polled for
+    // every configured line, every couple of seconds.
+    if (DaemonClient::stream_absent(result ? result->status : 0)) {
+      if (status != nullptr) {
+        *status = SinkStatus{};
+        status->in_use = false;
+      }
+      mark_connected();
+      return true;
+    }
+    if (!accept(result, error)) {
       return false;
     }
+    document = parse_or_empty(result->body);
     if (status != nullptr) {
+      status->in_use = true;
       const json flags = json_get<json>(document, "sink_flags", json::object());
       status->receiving_rtp_packet =
           json_get<bool>(flags, "receiving_rtp_packet", false);
@@ -140,6 +163,14 @@ class HttpDaemonClient : public DaemonClient {
 
   bool get_source_sdp(int id, std::string* sdp, std::string* error) override {
     auto result = client_.Get("/api/source/sdp/" + std::to_string(id));
+    // Same rule as a sink's status: no such source is an answer, not a failure.
+    if (DaemonClient::stream_absent(result ? result->status : 0)) {
+      if (sdp != nullptr) {
+        sdp->clear();
+      }
+      mark_connected();
+      return true;
+    }
     if (!accept(result, error)) {
       return false;
     }
@@ -327,7 +358,10 @@ class FakeDaemonClient : public DaemonClient {
   bool get_sink_status(int id, SinkStatus* status, std::string* error) override {
     (void)error;
     if (status != nullptr) {
-      status->receiving_rtp_packet = sinks_.find(id) != sinks_.end();
+      // The fake has a stream for every sink that was put into it, which is what
+      // "in use" means to the real daemon too.
+      status->in_use = sinks_.find(id) != sinks_.end();
+      status->receiving_rtp_packet = status->in_use;
       status->muted = false;
     }
     return true;
