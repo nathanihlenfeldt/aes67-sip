@@ -386,9 +386,9 @@ function LineEditor({ line, config, onSave, onCall, onTone, onReload, busy }) {
         </div>
         <p className="muted small">
           Puts a tone on this line&apos;s AES67 <strong>output</strong> channels - what the daemon publishes
-          as its source - so an outbound path can be proved without a PBX call or an endpoint:
-          subscribe something to that source and listen, or loop it back (a sink subscribed to
-          our own source) and bind a party line&apos;s member to the returned capture channel.
+          as its source - and the &quot;AES67 out&quot; meter shows it. Hearing it needs a peer subscribed
+          to that source; the appliance&apos;s own loopback sink does not receive its own multicast,
+          so it is not a way to hear the tone locally.
         </p>
       </Section>
 

@@ -107,9 +107,13 @@ struct LineAes67Config {
   bool refclk_ptp_traceable{false};
   /**
    * Commissioning aid: when no endpoint SDP is configured, subscribe the sink to
-   * our *own* source so the AES67 path can be exercised with the test tone.  Off
-   * by default, because the gateway must never overwrite a sink that was wired up
-   * elsewhere (Dante Controller, Q-SYS, the daemon UI) with a loopback.
+   * our *own* source rather than leaving it alone.  No audio comes back through
+   * that subscription on the reference appliance - the daemon does not loop its own
+   * multicast into its own receiver (measured on the Pi: the RTP leaves the
+   * interface while the local sink reports no reception) - so it exercises the
+   * sink's configuration path, not the audio.  Off by default, because the gateway
+   * must never overwrite a sink that was wired up elsewhere (Dante Controller,
+   * Q-SYS, the daemon UI) with a loopback.
    */
   bool commissioning_loopback{false};
 };

@@ -134,7 +134,10 @@ intercom use case:
   With neither set the gateway **leaves the sink alone** (`aes67.sdp_source:
   "unmanaged"`) - it may have been wired up in Dante Controller/Q-SYS and must not be
   overwritten. `aes67.commissioning_loopback: true` opts into subscribing the sink to
-  our own source instead, for bench testing without endpoints.
+  our own source instead. On the reference appliance no audio comes back through that
+  subscription (the daemon does not loop its own multicast into its own receiver, measured
+  on the Pi with tcpdump), so it exercises the sink's configuration path rather than
+  bridging audio.
 - `aes67.ignore_refclk_gmid` skips the daemon's PTP grandmaster check on the SDP - only
   needed when an endpoint advertises a different grandmaster than the locked one.
 

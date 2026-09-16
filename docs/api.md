@@ -221,17 +221,19 @@ and is refreshed every 2 s, `aes67.error` aggregates the RTP error flags
 | `GET` | `/api/lines/{id}/levels` | `{ "rx_dbfs": -18.2, "tx_dbfs": -60.0, "sip_rx_dbfs": -60.0, "sip_tx_dbfs": -18.2 }` |
 
 `POST /api/lines/{id}/tone` puts a tone on the RAVENNA **output** channels of one line -
-what the daemon publishes as that line's source - which is how an outbound path is proved
-without a PBX call or an endpoint: subscribe an endpoint (or the daemon) to that source and
-listen, or subscribe the appliance's own sink back to it (`aes67.commissioning_loopback`)
-so the tone returns as a *capture* channel that a party line's members can then be bound
-to.  It is written only to that line's own channels, and only while the line has at least
-one channel inside the opened device. Body: `{ "action": "start" | "stop", "hz": 1000,
-"seconds": 5 }`; a bare `{}` starts the commissioning default (1 kHz for five seconds). The
-reply is `{ "ok": true, "line": <line status> }`, and `lines[].test_tone` says whether a
-tone is running. An unknown line, the conference leg, an unknown action, a value of the
-wrong type, a frequency outside 20-20000 Hz, a duration outside 0.1-600 s, or a line with
-no channel on the device is refused with `400` and the reason.
+what the daemon publishes as that line's source - so an outbound path can be exercised
+without a PBX call: the tone shows up on the device channels the line maps to and in the
+line's `levels.tx_dbfs` (the UI's "AES67 out" meter). Hearing it needs a peer subscribed to
+that source - an endpoint, or another host. The appliance's own
+`aes67.commissioning_loopback` sink is *not* a way to hear it locally: on the reference
+appliance the tone's RTP leaves the interface (verified with tcpdump) while the local sink
+reports no reception, because the daemon's multicast is not looped back to its own
+receiver. Body: `{ "action": "start" | "stop", "hz": 1000, "seconds": 5 }`; a bare `{}`
+starts the commissioning default (1 kHz for five seconds). The reply is `{ "ok": true,
+"line": <line status> }`, and `lines[].test_tone` says whether a tone is running. An unknown
+line, the conference leg, an unknown action, a value of the wrong type, a frequency outside
+20-20000 Hz, a duration outside 0.1-600 s, or a line with no channel on the device is
+refused with `400` and the reason.
 
 `POST /api/lines/{id}/config` accepts:
 
