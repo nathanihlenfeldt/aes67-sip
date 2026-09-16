@@ -11,13 +11,21 @@ The production location whose intercom devices share an AES67 VLAN. "Local" mean
 "on the site", as opposed to the off-site side of the link.
 _Avoid_: local environment, venue, LAN
 
+**Endpoint**:
+Any AES67 device the matrix routes to and from: a beltpack, a fixed panel, a
+console, a DAW, a wireless base station. The matrix never assumes a shape — an
+endpoint declares how many talk channels it sends and how many listen channels it
+receives, so the same party lines serve a two-channel beltpack and a 64-channel
+console.
+_Avoid_: panel, device, node, station
+
 **Beltpack**:
-The site's intercom endpoint: a worn, PoE-powered device with **two talk and two
-listen channels**. It transmits both talk channels and sums its listen channels
-inside the device for the headset, so what it hears has been mixed for it — and
-because it has only those two channels, **one person is on at most two party lines
-at once**, fixed by subscription rather than chosen at runtime.
-_Avoid_: panel, endpoint, station, intercom
+A worn, PoE-powered endpoint with **two talk and two listen channels** — one of the
+endpoint shapes the site runs, not a special case in the model. It transmits both
+talk channels and sums its listen channels inside the device, so what it hears has
+been mixed for it; with only those two channels, one person is on at most two party
+lines at once, fixed by subscription rather than chosen at runtime.
+_Avoid_: panel, device, station, intercom
 
 **Channel**:
 One channel of the gateway's RAVENNA audio device: the unit a daemon sink or source
@@ -52,10 +60,15 @@ other without the audio leaving the site.
 _Avoid_: mixer, bridge, switch
 
 **Participant**:
-Anything the matrix routes to or from: a beltpack, or the conference. Each
-participant has an outgoing side — what it contributes — and an incoming side —
-what it hears; a beltpack has two channels on each side.
-_Avoid_: node, endpoint, member
+An endpoint, or the conference, as the matrix sees it: one outgoing side — the
+channels it contributes — and one incoming side — the channels it hears, each fed a
+mix. The matrix does not care what kind of device sits behind a participant.
+_Avoid_: node, subscriber
+
+**Member**:
+A participant's place on a party line, carrying that participant's contribution
+level. A participant is a member of every line it is routed into.
+_Avoid_: subscriber, input
 
 **Route**:
 How a party line's membership is expressed in configuration: one participant's

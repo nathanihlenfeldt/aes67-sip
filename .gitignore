@@ -24,3 +24,6 @@ config/status.json
 .idea/
 *.swp
 compile_commands.json
+
+# local issue tracker (skills write specs and tickets here)
+.scratch/
