@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# Runs everything CI runs, locally: clang-format, build, unit tests and the
-# config validation.  Run this before committing; the formatting gate must be
-# the *last* thing that passes, otherwise a later edit can break CI.
+# Runs everything CI runs, locally: clang-format, build, unit tests, the web UI
+# logic tests (and the bundle, when its dependencies are installed) and the config
+# validation.  Run this before committing; the formatting gate must be the *last*
+# thing that passes, otherwise a later edit can break CI.
 #
 # Usage:  ./scripts/check.sh
 #
@@ -39,6 +40,22 @@ cmake --build "${BUILD_DIR}" --parallel
 
 echo "==> tests"
 ctest --test-dir "${BUILD_DIR}" --output-on-failure
+
+echo "==> web UI logic tests"
+if ! command -v node >/dev/null 2>&1; then
+  echo "    node not found: skipping (CI runs them)"
+else
+  echo "    node $(node --version)"
+  (cd "${REPO_ROOT}/webui" && node --test test/*.test.js)
+  # The bundle build catches what the logic tests cannot see: a JSX or import error
+  # in a page.  It needs webui/node_modules (`npm install`), so it is skipped when
+  # the dependencies are not installed.
+  if [ -d "${REPO_ROOT}/webui/node_modules" ]; then
+    (cd "${REPO_ROOT}/webui" && npm run build >/dev/null) && echo "    bundle built"
+  else
+    echo "    webui/node_modules not installed: skipping the bundle build"
+  fi
+fi
 
 echo "==> shell scripts"
 for script in scripts/*.sh; do

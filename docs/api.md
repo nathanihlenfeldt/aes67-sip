@@ -34,7 +34,15 @@ or id, two endpoints with the same id, two endpoints claiming one device channel
 member channel outside the shape its endpoint declared, a member binding that names an
 endpoint nobody declares, or declared endpoint shapes wider than `audio.channels` opens.
 On a refusal neither the configuration file nor the running appliance is touched, so the
-reason can be fixed and resubmitted. The web UI shows the body as `save failed: …`.
+reason can be fixed and resubmitted. The web UI shows the body as `save failed: …`
+(Settings) or `not saved: …` (the party-lines page, which also marks the entry the reason
+names).
+
+The file is written *before* the change is applied: if it cannot be written the request
+fails with `500` and the reason, and neither the file nor the running configuration
+changes. A save that succeeds is applied through the same restart handler
+`POST /api/system/restart` uses; if *applying* it fails the request fails with `500` but
+the change stays in the file, so the next restart applies it.
 
 ## 4. `GET /api/status`
 

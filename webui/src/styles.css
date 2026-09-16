@@ -1091,3 +1091,59 @@ input[type='range'] {
   }
 }
 
+
+/* --- party lines (commissioning) ----------------------------------------- */
+
+.page-head .page-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pl-line {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 12px;
+  background: var(--panel-2);
+}
+
+.pl-line.is-offending {
+  border-color: var(--err);
+  box-shadow: 0 0 0 1px var(--err) inset;
+}
+
+.pl-line-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pl-line-head .field {
+  margin: 0;
+}
+
+.pl-line .table {
+  margin-bottom: 6px;
+}
+
+.input-narrow {
+  width: 9ch;
+}
+
+.input-wide {
+  width: 16ch;
+}
+
+.live-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.row-offending td {
+  background: var(--err-bg);
+}

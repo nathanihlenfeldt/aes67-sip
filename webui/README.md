@@ -18,6 +18,7 @@ npm install       # install dependencies
 npm start         # dev server on http://localhost:5173 (proxies /api)
 npm run build     # production bundle into dist/
 npm run serve     # preview the production build locally
+npm test          # logic tests (node's built-in runner, no extra dependency)
 ```
 
 ### Dev proxy
@@ -59,7 +60,12 @@ its own origin, so no proxy is used in production. Asset paths are relative
   on becoming visible again). Errors are returned as a message and the last good
   status is kept, so tables never blank out.
 * **`src/StatusContext.jsx`** — single shared poll for all pages.
-* **`src/pages/`** — Dashboard, Lines, AES67, Diagnostics, Settings.
+* **`src/commissioning.js`** — the party-lines page's logic: configuration document ⇄
+  drafts ⇄ the patch posted to `POST /api/config`, plus the locating of the appliance's
+  refusals against the entry that caused them. Kept out of the component so
+  `test/commissioning.test.js` can exercise it under `npm test`; it imports `./format.js`
+  with the extension so node can load it directly.
+* **`src/pages/`** — Dashboard, Lines, Party lines, AES67, Diagnostics, Settings.
 * **`src/components/`** — `StatusPill`, `LevelMeter` (dBFS −60…0 with peak
   hold, `null` levels render as −inf), `Card`, `ConfirmButton`, `Modal`.
 

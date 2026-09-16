@@ -10,7 +10,8 @@
   "scripts": {
     "start": "vite",
     "build": "vite build",
-    "serve": "vite preview"
+    "serve": "vite preview",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "react": "^18.3.1",

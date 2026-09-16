@@ -98,6 +98,11 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: webui/package-lock.json
+      # No dependencies needed: node's built-in runner loads the module under
+      # test directly, so this runs before npm ci.
+      - name: Logic tests
+        working-directory: webui
+        run: node --test test/*.test.js
       - name: Install
         working-directory: webui
         run: npm ci

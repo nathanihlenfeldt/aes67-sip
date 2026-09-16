@@ -140,6 +140,9 @@ intercom use case:
 3. Open `http://<appliance>:8081`:
    - **Dashboard** - PTP, daemon reachability, SIP registrations, per-line state/levels
    - **Lines** - channel mapping, gain/mute, call controls, DTMF, test tone
+   - **Party lines** - the commissioning view and editor: each line with its members,
+     their contribution levels and live levels, and membership, levels and per-channel
+     bindings edited here rather than in JSON
    - **AES67** - daemon config, sinks/sources, SAP/mDNS browser (pick a source per line)
    - **Diagnostics** - log tail, self-test, per-channel meters
 4. Check ALSA directly if a line looks dead:

@@ -14,6 +14,7 @@ import StatusPill from './components/StatusPill';
 
 import Dashboard from './pages/Dashboard';
 import Lines from './pages/Lines';
+import PartyLines from './pages/PartyLines';
 import Aes67 from './pages/Aes67';
 import Settings from './pages/Settings';
 import Diagnostics from './pages/Diagnostics';
@@ -21,6 +22,7 @@ import Diagnostics from './pages/Diagnostics';
 const NAV = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/lines', label: 'Lines' },
+  { to: '/party-lines', label: 'Party lines' },
   { to: '/aes67', label: 'AES67' },
   { to: '/diagnostics', label: 'Diagnostics' },
   { to: '/settings', label: 'Settings' },
@@ -114,6 +116,7 @@ function Shell() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/lines" element={<Lines />} />
+          <Route path="/party-lines" element={<PartyLines />} />
           <Route path="/aes67" element={<Aes67 />} />
           <Route path="/diagnostics" element={<Diagnostics />} />
           <Route path="/settings" element={<Settings />} />

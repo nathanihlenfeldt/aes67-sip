@@ -42,6 +42,11 @@ std::string describe_binding(const MatrixLinePlan& line, size_t index) {
  * Refuses two `subject` sharing an id.  Ids are the keys everything else uses -
  * member bindings name endpoints by id, the status view keys lines by id - so a
  * duplicate makes a configuration ambiguous rather than merely untidy.
+ *
+ * The wording of every refusal here and in the helpers below is a contract with
+ * the web UI's commissioning page, which shows a refusal against the entry it
+ * names (`webui/src/commissioning.js`, `locateRefusal`): changing a message means
+ * changing that matcher, and the tests on both sides pin it.
  */
 bool refuse_duplicate_ids(const std::vector<std::string>& ids,
                           const std::string& subject, std::string* error) {

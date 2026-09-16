@@ -227,11 +227,14 @@ void ApiServer::register_routes() {
                 reply_error(response, 400, error);
                 return;
               }
-              *config_ = candidate;
-              if (!config_->save(config_path_, &error)) {
+              // The file comes first: it is the source of truth a rebuild
+              // restores, so a configuration that cannot be written is reported
+              // instead of running until the next restart loses it.
+              if (!candidate.save(config_path_, &error)) {
                 reply_error(response, 500, error);
                 return;
               }
+              *config_ = candidate;
               if (restart_ && !restart_(&error)) {
                 reply_error(response, 500, error);
                 return;

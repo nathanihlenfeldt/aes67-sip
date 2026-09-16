@@ -54,13 +54,18 @@ struct Gateway {
   std::unique_ptr<SipEngine> engine;
   std::unique_ptr<ApiServer> api;
   std::string error;
+  std::string config_path_;
 
   /**
    * `tweak` runs before anything is built, which is how a test declares endpoints
    * and party lines.  A null tweak leaves the default single-line gateway.
+   * `config_path` is where a save is attempted: a path that cannot be written is
+   * how the "refused rather than appearing to succeed" case is set up.
    */
   explicit Gateway(bool with_sip = true,
-                   const std::function<void(Config&)>& tweak = {}) {
+                   const std::function<void(Config&)>& tweak = {},
+                   std::string config_path = kTestConfigPath)
+      : config_path_(std::move(config_path)) {
     if (tweak) {
       tweak(config);
     }
@@ -76,12 +81,12 @@ struct Gateway {
     router = std::make_unique<AudioRouter>(backend.get(), format);
     matrix = std::make_unique<IntercomMatrix>(config.audio.sample_rate);
     router->attach_matrix(matrix.get());
-    lines = std::make_unique<LineManager>(&config, kTestConfigPath, daemon.get(),
+    lines = std::make_unique<LineManager>(&config, config_path_, daemon.get(),
                                           router.get(), nullptr);
     lines->attach_matrix(matrix.get());
     engine = SipEngine::create(config.sip, lines.get(), lines.get(), &error);
     lines->attach_engine(engine.get());
-    api = std::make_unique<ApiServer>(&config, kTestConfigPath, daemon.get(),
+    api = std::make_unique<ApiServer>(&config, config_path_, daemon.get(),
                                       router.get(), lines.get(), engine.get());
     api->attach_matrix(matrix.get());
   }
@@ -98,6 +103,19 @@ struct Gateway {
     }
     lines->start_supervision();
     return api->start(&error);
+  }
+
+  /**
+   * The appliance's restart handler, as `App::restart` behaves: re-read the file
+   * and apply *that*, so a test can assert that what was saved is what runs.
+   */
+  bool restart_from_file(std::string* restart_error) {
+    Config reloaded;
+    std::string load_error;
+    if (Config::load(config_path_, &reloaded, &load_error)) {
+      config = reloaded;
+    }
+    return lines->apply_configuration(restart_error);
   }
 
   void stop() {
@@ -617,7 +635,7 @@ TEST_CASE(rest_api_refuses_a_configuration_that_could_not_work) {
   // the same wiring as the appliance: an accepted edit is applied, a refused one
   // never gets that far
   gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
-    return gateway.lines->apply_configuration(restart_error);
+    return gateway.restart_from_file(restart_error);
   });
   CHECK(gateway.start());
   httplib::Client client("127.0.0.1", kTestPort);
@@ -632,14 +650,46 @@ TEST_CASE(rest_api_refuses_a_configuration_that_could_not_work) {
   second["id"] = "stage";
   second["name"] = "Stage";
   lines.push_back(second);
-  const auto accepted = client.Post(
-      "/api/config", json{{"party_lines", lines}}.dump(), "application/json");
+  // The patch the commissioning page posts: both of the arrays it owns, as they
+  // are.
+  const json patch =
+      json{{"endpoints", before.at("endpoints")}, {"party_lines", lines}};
+  const auto accepted =
+      client.Post("/api/config", patch.dump(), "application/json");
   CHECK(accepted && accepted->status == 200);
   CHECK_EQ(get_json(client, "/api/config").at("party_lines").size(), 2U);
+  // ...and what was saved is what the appliance is running.
+  CHECK_EQ(get_json(client, "/api/status").at("party_lines").size(), 2U);
   Config persisted;
   std::string error;
   CHECK(Config::load(kTestConfigPath, &persisted, &error));
   CHECK_EQ(persisted.party_lines.size(), 2U);
+
+  // The edits the commissioning page makes on a member - a contribution level and
+  // an unbound listen slot - are what the running matrix then reports.
+  const json before_edit = get_json(client, "/api/config");
+  json edited = before_edit.at("party_lines");
+  edited[1]["members"][1]["contribution_db"] = -6.0;
+  edited[1]["members"][1]["listen_channel"] = -1;
+  const auto changed = client.Post(
+      "/api/config",
+      json{{"endpoints", before_edit.at("endpoints")}, {"party_lines", edited}}
+          .dump(),
+      "application/json");
+  CHECK(changed && changed->status == 200);
+  const json running = get_json(client, "/api/status").at("party_lines")[1];
+  CHECK_NEAR(running.at("members")[1].at("contribution_db").get<double>(), -6.0,
+             1e-9);
+  CHECK_EQ(running.at("members")[1].at("listen_channel").get<int>(), -1);
+
+  // A reload re-reads the file, and the saved configuration is still the one that
+  // runs - which is what makes the file the thing a rebuild restores.
+  const auto restarted = client.Post("/api/system/restart", "", "application/json");
+  CHECK(restarted && restarted->status == 200);
+  const json after_restart = get_json(client, "/api/status").at("party_lines")[1];
+  CHECK_NEAR(after_restart.at("members")[1].at("contribution_db").get<double>(),
+             -6.0, 1e-9);
+  CHECK_EQ(after_restart.at("members")[1].at("listen_channel").get<int>(), -1);
 
   // ...and one that names a line twice is refused where it is edited: 400 with
   // the reason, and neither the running configuration nor the file changed.
@@ -730,6 +780,40 @@ TEST_CASE(gateway_refuses_an_invalid_configuration_as_a_whole) {
   std::string error;
   CHECK(gateway.lines->apply_configuration(&error));
   CHECK(!gateway.engine->account_status().empty());
+}
+
+TEST_CASE(rest_api_refuses_an_edit_it_cannot_persist) {
+  // A configuration path that cannot be written: the appliance has to say so
+  // rather than appearing to have saved, because the file is what a rebuild
+  // restores.
+  Gateway gateway(
+      true, [](Config& config) { config = party_line_config(); },
+      "no-such-directory/aes67-sip.conf");
+  gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
+    return gateway.restart_from_file(restart_error);
+  });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  const json before = get_json(client, "/api/config");
+  CHECK(!before.is_null());
+  json lines = before.at("party_lines");
+  json second = lines[0];
+  second["id"] = "stage";
+  second["name"] = "Stage";
+  lines.push_back(second);
+  const auto refused = client.Post(
+      "/api/config", json{{"party_lines", lines}}.dump(), "application/json");
+  CHECK(refused && refused->status == 500);
+  CHECK(refused->body.find("cannot write config file") != std::string::npos);
+
+  // The edit is neither running nor remembered: the page shows the reason
+  // instead of a saved state the next restart would lose.
+  CHECK_EQ(get_json(client, "/api/config").at("party_lines").size(), 1U);
+  CHECK_EQ(get_json(client, "/api/status").at("party_lines").size(), 1U);
+
+  gateway.stop();
 }
 
 TEST_CASE(rest_api_self_test_reports_checks) {
