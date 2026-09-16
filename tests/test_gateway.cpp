@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <set>
 #include <thread>
 
 #include <httplib.h>
@@ -92,7 +93,25 @@ struct Gateway {
     api->attach_matrix(matrix.get());
   }
 
+  /**
+   * The ports live gateways hold.  Every gateway in this suite binds the same test
+   * port, so two of them at once means an HTTP request is answered by whichever OS
+   * happens to win the connection race - macOS lets the second bind succeed, Linux
+   * does not - which turned a test mistake into a platform-dependent result.
+   * Refusing the second start makes that mistake fail on both.
+   */
+  static std::set<int>& live_ports() {
+    static std::set<int> ports;
+    return ports;
+  }
+
   bool start() {
+    if (!live_ports().insert(config.http_port).second) {
+      error =
+          "port " + std::to_string(config.http_port) +
+          " is already held by another gateway: stop it before starting this one";
+      return false;
+    }
     if (!router->start(&error)) {
       return false;
     }
@@ -126,6 +145,7 @@ struct Gateway {
   StubSipEngine* stub() { return dynamic_cast<StubSipEngine*>(engine.get()); }
 
   void stop() {
+    live_ports().erase(config.http_port);
     if (api != nullptr) {
       api->stop();
     }
@@ -1564,18 +1584,20 @@ TEST_CASE(rest_api_refuses_a_tone_on_a_line_with_no_channel_on_the_device) {
   CHECK(refused->body.find("no AES67 channel inside the device") !=
         std::string::npos);
   CHECK(!get_json(client, "/api/lines/0").at("test_tone").get<bool>());
+  gateway.stop();
 
   // A value of the wrong type is refused rather than quietly replaced by the
-  // default, which would make the tone look like it had been honoured.
+  // default, which would make the tone look like it had been honoured.  Its own
+  // gateway, on the same port as the one above only because that one has stopped.
   Gateway ok(true, [](Config& config) { config = test_config(); });
   CHECK(ok.start());
-  const auto wrong_type = client.Post(
+  httplib::Client ok_client("127.0.0.1", kTestPort);
+  ok_client.set_connection_timeout(2, 0);
+  const auto wrong_type = ok_client.Post(
       "/api/lines/0/tone", json{{"action", "start"}, {"hz", "loud"}}.dump(),
       "application/json");
   CHECK(wrong_type && wrong_type->status == 400);
   CHECK(wrong_type->body.find("hz must be a number") != std::string::npos);
-
-  gateway.stop();
   ok.stop();
 }
 
