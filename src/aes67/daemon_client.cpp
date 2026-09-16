@@ -400,6 +400,89 @@ class FakeDaemonClient : public DaemonClient {
 // factory and stream document builders
 // ---------------------------------------------------------------------------
 
+namespace {
+
+/**
+ * Base both of an endpoint's stream names are built from: the name configured
+ * for it, else the endpoint's own name, else its id.  Any of the three is
+ * something a human recognises in a routing grid.
+ *
+ * Parsing a configuration file already fills `stream_name` from the name (see
+ * `endpoint_from_json`), so the later arms carry an endpoint that was built in
+ * code; they are here so no stream can end up unnamed.
+ */
+std::string endpoint_stream_base(const EndpointConfig& endpoint) {
+  for (const std::string& candidate :
+       {endpoint.aes67.stream_name, endpoint.name, endpoint.id}) {
+    if (!trim(candidate).empty()) {
+      return trim(candidate);
+    }
+  }
+  return "endpoint";
+}
+
+/**
+ * The daemon document for one source: a *single* stream carrying every channel
+ * in `channels`, so a two channel beltpack and a many channel console differ
+ * only in that vector.
+ */
+json source_document(const Aes67DaemonConfig& daemon_config,
+                     const std::string& name, const std::vector<unsigned>& channels,
+                     const std::string& codec, bool enabled,
+                     bool refclk_ptp_traceable) {
+  return json{{"enabled", enabled},
+              {"name", name},
+              {"io", "Audio Device"},
+              {"codec", codec},
+              {"address", ""},  // let the daemon pick from its multicast base
+              {"max_samples_per_packet", 48},
+              {"ttl", daemon_config.source_ttl},
+              {"payload_type", daemon_config.source_payload_type},
+              {"dscp", daemon_config.source_dscp},
+              {"refclk_ptp_traceable", refclk_ptp_traceable},
+              {"map", channels}};
+}
+
+/**
+ * The daemon document for one sink: a single stream carrying every channel in
+ * `channels`, describing the remote side's RTP stream with `remote_sdp`.
+ * `subject` names the owner of the stream in the error, so an endpoint and a
+ * line each get a message the commissioning engineer can act on.
+ */
+bool sink_document(const Aes67DaemonConfig& daemon_config, const std::string& name,
+                   const std::vector<unsigned>& channels,
+                   const std::string& remote_sdp, bool ignore_refclk_gmid,
+                   const std::string& subject, json* sink, std::string* error) {
+  if (sink == nullptr) {
+    if (error != nullptr) {
+      *error = "internal error: sink document pointer is null";
+    }
+    return false;
+  }
+  if (trim(remote_sdp).empty()) {
+    if (error != nullptr) {
+      *error = subject +
+               " has no endpoint SDP: pick a discovered SAP/mDNS source or paste "
+               "the endpoint SDP (aes67.remote_source_id / aes67.remote_sdp)";
+    }
+    return false;
+  }
+
+  // use_sdp = true selects the inline `sdp` document; the daemon only fetches
+  // from the `source` URL when use_sdp is false.
+  *sink = json{{"name", name},
+               {"io", "Audio Device"},
+               {"delay", daemon_config.sink_delay_samples},
+               {"use_sdp", true},
+               {"source", ""},
+               {"sdp", remote_sdp},
+               {"ignore_refclk_gmid", ignore_refclk_gmid},
+               {"map", channels}};
+  return true;
+}
+
+}  // namespace
+
 std::unique_ptr<DaemonClient> DaemonClient::create(
     const Aes67DaemonConfig& config) {
   if (config.fake) {
@@ -410,48 +493,47 @@ std::unique_ptr<DaemonClient> DaemonClient::create(
 
 json DaemonClient::make_source(const Aes67DaemonConfig& daemon_config,
                                const LineConfig& line) {
-  return json{{"enabled", line.enabled},
-              {"name", line.aes67.stream_name},
-              {"io", "Audio Device"},
-              {"codec", line.aes67.codec},
-              {"address", ""},  // let the daemon pick from its multicast base
-              {"max_samples_per_packet", 48},
-              {"ttl", daemon_config.source_ttl},
-              {"payload_type", daemon_config.source_payload_type},
-              {"dscp", daemon_config.source_dscp},
-              {"refclk_ptp_traceable", line.aes67.refclk_ptp_traceable},
-              {"map", line.aes67.channels}};
+  return source_document(daemon_config, line.aes67.stream_name, line.aes67.channels,
+                         line.aes67.codec, line.enabled,
+                         line.aes67.refclk_ptp_traceable);
 }
 
 bool DaemonClient::make_sink(const Aes67DaemonConfig& daemon_config,
                              const LineConfig& line, const std::string& remote_sdp,
                              json* sink, std::string* error) {
-  if (sink == nullptr) {
-    if (error != nullptr) {
-      *error = "internal error: sink document pointer is null";
-    }
-    return false;
-  }
-  if (trim(remote_sdp).empty()) {
-    if (error != nullptr) {
-      *error = "line " + std::to_string(line.id) + " (" + line.name +
-               ") has no endpoint SDP: pick a discovered SAP/mDNS source or paste "
-               "the endpoint SDP (aes67.remote_source_id / aes67.remote_sdp)";
-    }
-    return false;
-  }
+  return sink_document(daemon_config, line.aes67.stream_name, line.aes67.channels,
+                       remote_sdp, line.aes67.ignore_refclk_gmid,
+                       "line " + std::to_string(line.id) + " (" + line.name + ")",
+                       sink, error);
+}
 
-  // use_sdp = true selects the inline `sdp` document; the daemon only fetches
-  // from the `source` URL when use_sdp is false.
-  *sink = json{{"name", line.aes67.stream_name},
-               {"io", "Audio Device"},
-               {"delay", daemon_config.sink_delay_samples},
-               {"use_sdp", true},
-               {"source", ""},
-               {"sdp", remote_sdp},
-               {"ignore_refclk_gmid", line.aes67.ignore_refclk_gmid},
-               {"map", line.aes67.channels}};
-  return true;
+std::string DaemonClient::endpoint_talk_stream_name(
+    const EndpointConfig& endpoint) {
+  return endpoint_stream_base(endpoint) + " (talk)";
+}
+
+std::string DaemonClient::endpoint_listen_stream_name(
+    const EndpointConfig& endpoint) {
+  return endpoint_stream_base(endpoint) + " (listen)";
+}
+
+json DaemonClient::make_endpoint_source(const Aes67DaemonConfig& daemon_config,
+                                        const EndpointConfig& endpoint) {
+  // Appliance -> endpoint, always enabled: the mixes exist whether or not the
+  // endpoint is listening to them yet.
+  return source_document(daemon_config, endpoint_listen_stream_name(endpoint),
+                         endpoint.listen_channels, endpoint.aes67.codec, true,
+                         endpoint.aes67.refclk_ptp_traceable);
+}
+
+bool DaemonClient::make_endpoint_sink(const Aes67DaemonConfig& daemon_config,
+                                      const EndpointConfig& endpoint,
+                                      const std::string& remote_sdp, json* sink,
+                                      std::string* error) {
+  return sink_document(
+      daemon_config, endpoint_talk_stream_name(endpoint), endpoint.talk_channels,
+      remote_sdp, endpoint.aes67.ignore_refclk_gmid,
+      "endpoint " + endpoint.id + " (" + endpoint.name + ")", sink, error);
 }
 
 }  // namespace aes67sip

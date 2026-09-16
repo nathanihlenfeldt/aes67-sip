@@ -69,15 +69,48 @@ json line_to_json(const LineConfig& line) {
               {"sip", sip}};
 }
 
+/**
+ * Canonical RTP payload name for a configured codec.  `subject` names the owner
+ * of the setting in the warning, so an unknown payload is reported against the
+ * line or the endpoint that asked for it.
+ */
+std::string canonical_codec(const std::string& requested,
+                            const std::string& subject) {
+  const std::string value = to_lower(trim(requested));
+  static const std::pair<const char*, const char*> kCodecs[] = {{"l16", "L16"},
+                                                                {"l24", "L24"},
+                                                                {"l2432", "L2432"},
+                                                                {"am824", "AM824"},
+                                                                {"l32", "L32"}};
+  for (const auto& entry : kCodecs) {
+    if (value == entry.first) {
+      return entry.second;
+    }
+  }
+  if (!value.empty()) {
+    LOG_WARN(subject, ": unknown aes67.codec '", requested,
+             "' (supported: L16, L24, L2432, AM824, L32), using L24");
+  }
+  return "L24";
+}
+
 // ---------------------------------------------------------------------------
 // the intercom matrix
 // ---------------------------------------------------------------------------
 
 json endpoint_to_json(const EndpointConfig& endpoint) {
+  json aes67{{"stream_name", endpoint.aes67.stream_name},
+             {"auto_create_streams", endpoint.aes67.auto_create_streams},
+             {"codec", endpoint.aes67.codec},
+             {"remote_source_id", endpoint.aes67.remote_source_id},
+             {"remote_sdp", endpoint.aes67.remote_sdp},
+             {"ignore_refclk_gmid", endpoint.aes67.ignore_refclk_gmid},
+             {"refclk_ptp_traceable", endpoint.aes67.refclk_ptp_traceable}};
   return json{{"id", endpoint.id},
               {"name", endpoint.name},
               {"talk_channels", endpoint.talk_channels},
-              {"listen_channels", endpoint.listen_channels}};
+              {"listen_channels", endpoint.listen_channels},
+              {"aes67", aes67}};
 }
 
 EndpointConfig endpoint_from_json(const json& document) {
@@ -88,6 +121,35 @@ EndpointConfig endpoint_from_json(const json& document) {
       json_get<std::vector<unsigned>>(document, "talk_channels", {});
   endpoint.listen_channels =
       json_get<std::vector<unsigned>>(document, "listen_channels", {});
+  if (json_has(document, "aes67")) {
+    const auto& a = document.at("aes67");
+    endpoint.aes67.stream_name = json_get<std::string>(a, "stream_name", "");
+    endpoint.aes67.auto_create_streams = json_get<bool>(
+        a, "auto_create_streams", endpoint.aes67.auto_create_streams);
+    endpoint.aes67.codec = json_get<std::string>(a, "codec", endpoint.aes67.codec);
+    endpoint.aes67.remote_source_id =
+        json_get<std::string>(a, "remote_source_id", "");
+    endpoint.aes67.remote_sdp = json_get<std::string>(a, "remote_sdp", "");
+    endpoint.aes67.ignore_refclk_gmid =
+        json_get<bool>(a, "ignore_refclk_gmid", endpoint.aes67.ignore_refclk_gmid);
+    endpoint.aes67.refclk_ptp_traceable = json_get<bool>(
+        a, "refclk_ptp_traceable", endpoint.aes67.refclk_ptp_traceable);
+  }
+
+  // Both of its stream names are built from the endpoint's name, so an endpoint
+  // that declares only an id still gets streams a human can match in a routing
+  // grid.
+  if (endpoint.name.empty()) {
+    endpoint.name = endpoint.id;
+  }
+  if (endpoint.aes67.stream_name.empty()) {
+    endpoint.aes67.stream_name = endpoint.name;
+  }
+  // The endpoint's listen stream is ours, so its payload is ours to validate for
+  // the same reason a line's is: an unknown name would leave the stream
+  // misconfigured in the daemon.
+  endpoint.aes67.codec =
+      canonical_codec(endpoint.aes67.codec, "endpoint " + endpoint.id);
   return endpoint;
 }
 
@@ -154,27 +216,8 @@ void apply_line_defaults(LineConfig* line) {
   // RTP payload of our source: L24 for Dante/most AES67 devices, L16 for older
   // gear.  Anything else is rejected rather than silently sent to the daemon,
   // which would leave the stream misconfigured.
-  const std::string requested = to_lower(trim(line->aes67.codec));
-  static const std::pair<const char*, const char*> kCodecs[] = {{"l16", "L16"},
-                                                                {"l24", "L24"},
-                                                                {"l2432", "L2432"},
-                                                                {"am824", "AM824"},
-                                                                {"l32", "L32"}};
-  std::string canonical;
-  for (const auto& entry : kCodecs) {
-    if (requested == entry.first) {
-      canonical = entry.second;
-      break;
-    }
-  }
-  if (canonical.empty()) {
-    if (!requested.empty()) {
-      LOG_WARN("line ", line->id, ": unknown aes67.codec '", line->aes67.codec,
-               "' (supported: L16, L24, L2432, AM824, L32), using L24");
-    }
-    canonical = "L24";
-  }
-  line->aes67.codec = canonical;
+  line->aes67.codec =
+      canonical_codec(line->aes67.codec, "line " + std::to_string(line->id));
 }
 
 LineConfig line_from_json(const json& document) {

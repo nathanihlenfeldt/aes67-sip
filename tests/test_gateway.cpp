@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <thread>
@@ -396,6 +397,219 @@ TEST_CASE(rest_api_serves_status_and_controls_lines) {
 
   gateway.stop();
   std::remove(kTestConfigPath.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// scale: per-endpoint provisioning at 32 channels
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/**
+ * The reference site's configuration: sixteen endpoints of two talk and two
+ * listen channels each (32 channels per direction), with each of an endpoint's
+ * two pairs on a different one of eight party lines, so all 32 channels are live
+ * in both directions.  `device_channels` is what the appliance is told to open,
+ * so a test can ask for a device too narrow for the declared shapes.
+ *
+ * Each endpoint's talk stream is described here the way discovery would supply
+ * it on site, because a talk stream cannot be subscribed to without one.
+ */
+void scale_matrix(Config* config, unsigned device_channels = 32) {
+  config->audio.channels = device_channels;
+  for (unsigned i = 0; i < 16; ++i) {
+    EndpointConfig endpoint;
+    endpoint.id = "pack-" + std::to_string(i + 1);
+    endpoint.name = "Beltpack " + std::to_string(i + 1);
+    endpoint.talk_channels = {2 * i, 2 * i + 1};
+    endpoint.listen_channels = {2 * i, 2 * i + 1};
+    endpoint.aes67.remote_sdp =
+        "v=0\r\ns=Beltpack\r\nm=audio 5004 RTP/AVP 98\r\n"
+        "a=rtpmap:98 L24/48000/2\r\n";
+    config->endpoints.push_back(endpoint);
+  }
+  for (unsigned index = 0; index < 8; ++index) {
+    PartyLineConfig line;
+    line.id = "pl" + std::to_string(index + 1);
+    line.name = "PL " + std::to_string(index + 1);
+    config->party_lines.push_back(line);
+  }
+  for (unsigned i = 0; i < 16; ++i) {
+    for (unsigned pair = 0; pair < 2; ++pair) {
+      PartyLineMemberConfig member;
+      member.endpoint = "pack-" + std::to_string(i + 1);
+      member.talk_channel = static_cast<int>(pair);
+      member.listen_channel = static_cast<int>(pair);
+      // A level per line, low enough that four summed contributions stay inside
+      // the device's range and high enough to stay well above the meter floor.
+      member.contribution_db = -3.0 * static_cast<double>((i + pair) % 8);
+      config->party_lines[(i + pair) % 8].members.push_back(member);
+    }
+  }
+}
+
+/** The streams of `document` ("sinks" / "sources") whose name matches `suffix`. */
+std::vector<json> endpoint_streams(const json& document,
+                                   const std::string& suffix) {
+  std::vector<json> result;
+  for (const auto& stream :
+       document.at(document.contains("sinks") ? "sinks" : "sources")) {
+    const std::string name = json_get<std::string>(stream, "name", "");
+    if (name.find("Beltpack ") != std::string::npos &&
+        name.find(suffix) != std::string::npos) {
+      result.push_back(stream);
+    }
+  }
+  return result;
+}
+
+/** The one stream called `name`, or null.  A null result fails the checks below. */
+json stream_named(const std::vector<json>& streams, const std::string& name) {
+  for (const auto& stream : streams) {
+    if (json_get<std::string>(stream, "name", "") == name) {
+      return stream;
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+TEST_CASE(rest_api_provisions_one_stream_per_endpoint_direction) {
+  Gateway gateway(true, [](Config& config) { scale_matrix(&config); });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  // One stream per direction per endpoint, carrying *all* of that direction's
+  // channels: 16 talk streams and 16 listen streams, not 32 of each.
+  const json sinks = get_json(client, "/api/aes67/sinks");
+  const json sources = get_json(client, "/api/aes67/sources");
+  CHECK(!sinks.is_null());
+  CHECK(!sources.is_null());
+  const std::vector<json> talk = endpoint_streams(sinks, "(talk)");
+  const std::vector<json> listen = endpoint_streams(sources, "(listen)");
+  CHECK_EQ(talk.size(), 16U);
+  CHECK_EQ(listen.size(), 16U);
+  for (const auto& stream : talk) {
+    CHECK_EQ(stream.at("map").size(), 2U);
+  }
+  for (const auto& stream : listen) {
+    CHECK_EQ(stream.at("map").size(), 2U);
+  }
+
+  // The names carry the endpoint, so a human matches a stream to an endpoint in
+  // a vendor's routing grid without a lookup table.
+  const json first_talk = stream_named(talk, "Beltpack 1 (talk)");
+  const json first_listen = stream_named(listen, "Beltpack 1 (listen)");
+  CHECK(!first_talk.is_null());
+  CHECK(!first_listen.is_null());
+  CHECK_EQ(first_talk.at("map"), json({0, 1}));
+  CHECK_EQ(first_listen.at("map"), json({0, 1}));
+  const json last_talk = stream_named(talk, "Beltpack 16 (talk)");
+  CHECK(!last_talk.is_null());
+  CHECK_EQ(last_talk.at("map"), json({30, 31}));
+
+  // The configuration file is the source of truth: endpoints configured away
+  // take their streams with them, so the daemon does not keep sending a mix that
+  // nothing routes any more.
+  gateway.config.endpoints.clear();
+  gateway.config.party_lines.clear();
+  std::string error;
+  CHECK(gateway.lines->apply_configuration(&error));
+  const json sources_after = get_json(client, "/api/aes67/sources");
+  const json sinks_after = get_json(client, "/api/aes67/sinks");
+  CHECK_EQ(endpoint_streams(sources_after, "(listen)").size(), 0U);
+  CHECK_EQ(endpoint_streams(sinks_after, "(talk)").size(), 0U);
+  CHECK_EQ(sources_after.at("sources").size(), 1U);  // only the SIP line's own
+  CHECK_EQ(sinks_after.at("sinks").size(), 0U);
+
+  gateway.stop();
+}
+
+TEST_CASE(gateway_refuses_a_configuration_wider_than_the_device) {
+  // The declared shapes need 32 channels per direction and the device is opened
+  // at 16: the configuration is refused, and refused as a whole.
+  Gateway gateway(true, [](Config& config) { scale_matrix(&config, 16); });
+
+  std::string error;
+  CHECK(!gateway.lines->apply_configuration(&error));
+  // both totals, in the roles they play
+  CHECK(error.find("32 device channels") != std::string::npos);       // declared
+  CHECK(error.find("audio.channels opens 16") != std::string::npos);  // available
+
+  // Nothing was provisioned and nothing was routed: no half-wired site.
+  json sources;
+  std::string daemon_error;
+  CHECK(gateway.daemon->get_sources(&sources, &daemon_error));
+  CHECK_EQ(sources.at("sources").size(), 0U);
+  json sinks;
+  CHECK(gateway.daemon->get_sinks(&sinks, &daemon_error));
+  CHECK_EQ(sinks.at("sinks").size(), 0U);
+  CHECK(gateway.matrix->empty());
+
+  // The same configuration is accepted once the device is wide enough: what was
+  // refused is the fit, not the configuration.
+  gateway.config.audio.channels = 32;
+  CHECK(gateway.lines->apply_configuration(&error));
+  CHECK(gateway.daemon->get_sources(&sources, &daemon_error));
+  CHECK_EQ(sources.at("sources").size(), 17U);  // 16 endpoints + the SIP line
+}
+
+TEST_CASE(gateway_mixes_the_reference_scale_in_a_single_run) {
+  Gateway gateway(true, [](Config& config) { scale_matrix(&config); });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  // Eight party lines of four members each, every member's audio arriving, in
+  // one run: the whole path - configuration -> per-endpoint streams -> matrix ->
+  // audio thread -> status contract.
+  const bool mixed = gateway.wait_for(
+      [](const json& status) {
+        const auto& lines = status.at("party_lines");
+        if (lines.size() != 8) {
+          return false;
+        }
+        for (const auto& line : lines) {
+          if (line.at("members").size() != 4) {
+            return false;
+          }
+          for (const auto& member : line.at("members")) {
+            if (!member.at("arriving").get<bool>()) {
+              return false;
+            }
+          }
+        }
+        return true;
+      },
+      10000);
+  CHECK(mixed);
+
+  // and the other direction of the same claim: every endpoint's mix is present
+  // on the channels it listens on, at the level of the line that channel is bound
+  // to.  The simulated device carries a 0.25 sine on every capture channel, so a
+  // listen channel must read its line's *other three* members summed - a channel
+  // carrying the wrong line, or the listener's own audio, would read differently.
+  const json status = get_json(client, "/api/status");
+  CHECK(!status.is_null());
+  CHECK_EQ(status.at("party_lines").size(), 8U);
+  const json& playback = status.at("audio").at("playback_dbfs");
+  CHECK_EQ(playback.size(), 32U);
+  for (unsigned endpoint = 0; endpoint < 16; ++endpoint) {
+    for (unsigned pair = 0; pair < 2; ++pair) {
+      const double expected = linear_to_dbfs(
+          3.0 * 0.25 / std::sqrt(2.0) *
+          db_to_linear(-3.0 * static_cast<double>((endpoint + pair) % 8)));
+      const json& level = playback[2 * endpoint + pair];
+      CHECK(!level.is_null());  // the endpoint hears its line
+      if (!level.is_null()) {
+        CHECK_NEAR(level.get<double>(), expected, 2.0);
+      }
+    }
+  }
+
+  gateway.stop();
 }
 
 TEST_CASE(rest_api_self_test_reports_checks) {

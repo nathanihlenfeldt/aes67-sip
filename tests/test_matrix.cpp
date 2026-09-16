@@ -588,6 +588,184 @@ TEST_CASE(matrix_mutes_a_contribution_without_changing_what_that_member_hears) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// scale: eight party lines, 32 channels, every member in both directions
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/**
+ * The reference site's shape, as configuration rather than as a plan: every
+ * endpoint declares two talk and two listen channels, packed into the device
+ * channels in order, and each of its two pairs is a member of a different party
+ * line.  Sixteen endpoints therefore total 32 channels per direction, eight
+ * lines have four members each, and every declared channel is live - which is
+ * what the device has to be opened at, decided from these declarations.
+ */
+Config scale_config(unsigned endpoint_count) {
+  Config config = Config::from_json(json::object());
+  config.audio.channels = 2 * endpoint_count;
+  for (unsigned i = 0; i < endpoint_count; ++i) {
+    EndpointConfig endpoint;
+    endpoint.id = "pack-" + std::to_string(i + 1);
+    endpoint.name = "Beltpack " + std::to_string(i + 1);
+    endpoint.talk_channels = {2 * i, 2 * i + 1};
+    endpoint.listen_channels = {2 * i, 2 * i + 1};
+    config.endpoints.push_back(endpoint);
+  }
+  const unsigned line_count = endpoint_count / 2;
+  for (unsigned index = 0; index < line_count; ++index) {
+    PartyLineConfig line;
+    line.id = "pl" + std::to_string(index + 1);
+    line.name = "PL " + std::to_string(index + 1);
+    config.party_lines.push_back(line);
+  }
+  for (unsigned i = 0; i < endpoint_count; ++i) {
+    for (unsigned pair = 0; pair < 2; ++pair) {
+      const unsigned line_index = (i + pair) % line_count;
+      PartyLineMemberConfig member;
+      member.endpoint = "pack-" + std::to_string(i + 1);
+      member.talk_channel = static_cast<int>(pair);
+      member.listen_channel = static_cast<int>(pair);
+      // Each line has its own contribution level, so a listen channel carrying
+      // another line's mix cannot pass by accident.
+      member.contribution_db = -3.0 * static_cast<double>(line_index);
+      config.party_lines[line_index].members.push_back(member);
+    }
+  }
+  return config;
+}
+
+const MatrixEndpointPlan* endpoint_plan(const MatrixPlan& plan,
+                                        const std::string& id) {
+  for (const auto& endpoint : plan.endpoints) {
+    if (endpoint.id == id) {
+      return &endpoint;
+    }
+  }
+  return nullptr;
+}
+
+/** The device channel a member's listen channel maps onto. */
+unsigned listen_device_channel(const MatrixPlan& plan,
+                               const MatrixMemberPlan& member) {
+  return endpoint_plan(plan, member.endpoint_id)
+      ->listen_channels[static_cast<size_t>(member.listen_channel)];
+}
+
+}  // namespace
+
+TEST_CASE(matrix_channel_use_follows_the_declared_shapes) {
+  // Sixteen endpoints of two talk and two listen channels total 32 channels per
+  // direction: the width the device needs is declared, never assumed.
+  const Config full_config = scale_config(16);
+  MatrixPlan full;
+  std::string error;
+  CHECK(IntercomMatrix::plan_from_config(full_config, &full, &error));
+  const MatrixChannelUse full_use = IntercomMatrix::channel_use(full);
+  CHECK_EQ(full_use.capture, 32U);
+  CHECK_EQ(full_use.playback, 32U);
+  CHECK_EQ(full_use.device_channels(), 32U);
+
+  // Halving the endpoints halves the channels used - no fixed count anywhere.
+  const Config half_config = scale_config(8);
+  MatrixPlan half;
+  CHECK(IntercomMatrix::plan_from_config(half_config, &half, &error));
+  const MatrixChannelUse half_use = IntercomMatrix::channel_use(half);
+  CHECK_EQ(half_use.capture, 16U);
+  CHECK_EQ(half_use.playback, 16U);
+  CHECK_EQ(half_use.device_channels(), 16U);
+
+  // The highest declared index is what sets the width, in either direction.
+  MatrixPlan sparse;
+  sparse.endpoints.push_back(endpoint("single", {3}, {3}));
+  sparse.endpoints.push_back(endpoint("console", {4, 5, 6, 7}, {4, 5, 6, 7}));
+  const MatrixChannelUse sparse_use = IntercomMatrix::channel_use(sparse);
+  CHECK_EQ(sparse_use.capture, 8U);
+  CHECK_EQ(sparse_use.playback, 8U);
+}
+
+TEST_CASE(matrix_refuses_declared_channels_beyond_the_device) {
+  // The shapes declare 32 channels per direction; the device opens 16.
+  Config config = scale_config(16);
+  config.audio.channels = 16;
+
+  MatrixPlan plan;
+  std::string error;
+  CHECK(!IntercomMatrix::plan_from_config(config, &plan, &error));
+  // both totals, in the roles they play
+  CHECK(error.find("32 device channels") != std::string::npos);       // declared
+  CHECK(error.find("audio.channels opens 16") != std::string::npos);  // available
+
+  // The same configuration is accepted once the device is wide enough: the
+  // refusal is about capacity, not about the configuration being wrong.
+  config.audio.channels = 32;
+  CHECK(IntercomMatrix::plan_from_config(config, &plan, &error));
+  CHECK(error.empty());
+}
+
+TEST_CASE(matrix_mixes_eight_lines_across_every_endpoint) {
+  constexpr unsigned kEndpoints = 16;
+  constexpr unsigned kChannels = 32;
+  constexpr unsigned kFrames = 8;
+
+  Config config = scale_config(kEndpoints);
+  MatrixPlan plan;
+  std::string error;
+  CHECK(IntercomMatrix::plan_from_config(config, &plan, &error));
+  CHECK_EQ(plan.endpoints.size(), kEndpoints);
+  CHECK_EQ(plan.lines.size(), 8U);
+
+  IntercomMatrix matrix;
+  CHECK(matrix.configure(plan, &error));
+
+  // Every member's audio arrives at the appliance: all 32 talk channels carry
+  // audio, one per member of the model.
+  std::vector<float> capture(kChannels * kFrames, 0.0F);
+  for (unsigned channel = 0; channel < kChannels; ++channel) {
+    for (unsigned frame = 0; frame < kFrames; ++frame) {
+      capture[frame * kChannels + channel] = 0.25F;
+    }
+  }
+  std::vector<float> playback(kChannels * kFrames, 0.0F);
+  matrix.process(capture.data(), playback.data(), kChannels, kFrames);
+
+  // Each listen channel is then every *other* member of the line it is bound to,
+  // at that line's contribution level, and nothing else: a mix that included the
+  // listening endpoint's own audio, or leaked another line's, would read
+  // differently.  Both directions of every member are checked.
+  unsigned checked = 0;
+  for (size_t index = 0; index < plan.lines.size(); ++index) {
+    const MatrixLinePlan& line = plan.lines[index];
+    CHECK_EQ(line.members.size(),
+             kChannels / static_cast<unsigned>(plan.lines.size()));
+    const double expected = 0.25 * db_to_linear(-3.0 * static_cast<double>(index)) *
+                            static_cast<double>(line.members.size() - 1);
+    for (const auto& member : line.members) {
+      const unsigned channel = listen_device_channel(plan, member);
+      for (unsigned frame = 0; frame < kFrames; ++frame) {
+        CHECK_NEAR(playback[frame * kChannels + channel], expected, 1e-3);
+      }
+      ++checked;
+    }
+  }
+  CHECK_EQ(checked, kChannels);
+
+  // The status view reports the same eight lines with every member heard from -
+  // the contract the commissioning UI and these tests share.
+  const std::vector<MatrixLineStatus> status = matrix.status();
+  CHECK_EQ(status.size(), 8U);
+  unsigned members = 0;
+  for (const auto& line : status) {
+    CHECK_EQ(line.members.size(), 4U);
+    for (const auto& member : line.members) {
+      ++members;
+      CHECK(member.arriving);  // its audio reached the appliance
+    }
+  }
+  CHECK_EQ(members, kChannels);
+}
+
 TEST_CASE(matrix_applies_the_contribution_level) {
   MatrixPlan plan;
   plan.endpoints.push_back(endpoint("a", {0}, {0}));

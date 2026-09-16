@@ -121,12 +121,29 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
   std::string resolve_endpoint_sdp(const LineConfig& line, std::string* origin,
                                    std::string* error);
   /**
-   * Resolves the *endpoint's* SDP for a line: an inline document
-   * (`aes67.remote_sdp`) or a source discovered by SAP/mDNS
-   * (`aes67.remote_source_id`).
+   * The *endpoint's* SDP for a stream description: an inline document
+   * (`remote_sdp`) or a source discovered by SAP/mDNS (`remote_source_id`).
+   * Empty when neither is configured; `subject` names the owner of the setting
+   * in the messages ("line 0 (Stage Left)", "endpoint pack-01 (Camera 1)").
    */
-  bool resolve_remote_sdp(const LineConfig& line, std::string* sdp,
-                          std::string* error);
+  std::string resolve_remote_sdp(const std::string& remote_sdp,
+                                 const std::string& remote_source_id,
+                                 const std::string& subject, std::string* origin,
+                                 std::string* error);
+
+  /**
+   * Provisions every declared endpoint: one daemon stream per direction, each
+   * carrying all of that direction's channels, named after the endpoint.  The
+   * matrix writes those channels; this is what puts them on the wire.
+   */
+  void configure_endpoint_streams();
+
+  /**
+   * Deletes the streams of endpoints that are no longer configured, and records
+   * the ids of the ones that are.  `allocated` is keyed by endpoint id.
+   */
+  void remove_endpoint_streams(const std::map<std::string, int>& allocated);
+
   /** Updates the cached state and notifies listeners (callbacks, log). */
   void set_state(LineRuntime& line, LineState state, int code,
                  const std::string& detail);
@@ -148,6 +165,11 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
 
   mutable std::mutex mutex_;
   std::map<int, std::shared_ptr<LineRuntime>> lines_;
+  /**
+   * Daemon ids of the endpoint streams created by the last apply, so the ones
+   * whose endpoint is configured away can be deleted again.  Guarded by `mutex_`.
+   */
+  std::map<std::string, int> endpoint_stream_ids_;
 
   std::thread supervisor_;
   std::atomic<bool> running_{false};

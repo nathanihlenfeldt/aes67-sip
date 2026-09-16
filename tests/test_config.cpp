@@ -90,6 +90,55 @@ TEST_CASE(config_parse_line_document) {
   CHECK_EQ(line.sip.call_mode, std::string("dial_out"));
 }
 
+TEST_CASE(config_endpoint_streams_round_trip) {
+  const json document{
+      {"endpoints", json::array({json{{"id", "pack-01"},
+                                      {"name", "Camera 1"},
+                                      {"talk_channels", {0, 1}},
+                                      {"listen_channels", {2, 3}},
+                                      {"aes67",
+                                       {{"stream_name", "Camera 1 feed"},
+                                        {"auto_create_streams", false},
+                                        {"codec", "L16"},
+                                        {"remote_source_id", "SAP:abc"},
+                                        {"remote_sdp", "v=0"},
+                                        {"ignore_refclk_gmid", true},
+                                        {"refclk_ptp_traceable", true}}}}})}};
+  const Config config = Config::from_json(document);
+  CHECK_EQ(config.endpoints.size(), 1U);
+  const EndpointConfig& endpoint = config.endpoints[0];
+  CHECK_EQ(endpoint.id, std::string("pack-01"));
+  CHECK_EQ(endpoint.name, std::string("Camera 1"));
+  CHECK_EQ(endpoint.talk_channels, std::vector<unsigned>({0, 1}));
+  CHECK_EQ(endpoint.listen_channels, std::vector<unsigned>({2, 3}));
+  CHECK_EQ(endpoint.aes67.stream_name, std::string("Camera 1 feed"));
+  CHECK(!endpoint.aes67.auto_create_streams);
+  CHECK_EQ(endpoint.aes67.codec, std::string("L16"));
+  CHECK_EQ(endpoint.aes67.remote_source_id, std::string("SAP:abc"));
+  CHECK_EQ(endpoint.aes67.remote_sdp, std::string("v=0"));
+  CHECK(endpoint.aes67.ignore_refclk_gmid);
+  CHECK(endpoint.aes67.refclk_ptp_traceable);
+
+  // and the whole block survives a save/load round trip
+  const Config restored = Config::from_json(config.to_json());
+  CHECK_EQ(restored.endpoints.size(), 1U);
+  CHECK_EQ(restored.endpoints[0].aes67.stream_name, std::string("Camera 1 feed"));
+  CHECK_EQ(restored.endpoints[0].aes67.codec, std::string("L16"));
+  CHECK_EQ(restored.endpoints[0].listen_channels, std::vector<unsigned>({2, 3}));
+  CHECK(restored.endpoints[0].aes67.refclk_ptp_traceable);
+
+  // An endpoint that only declares an id is still named, because both of its
+  // stream names are built from that name.
+  const Config minimal = Config::from_json(
+      json{{"endpoints", json::array({json{{"id", "pack-09"},
+                                           {"talk_channels", {0}},
+                                           {"listen_channels", {1}}}})}});
+  CHECK_EQ(minimal.endpoints[0].name, std::string("pack-09"));
+  CHECK_EQ(minimal.endpoints[0].aes67.stream_name, std::string("pack-09"));
+  CHECK_EQ(minimal.endpoints[0].aes67.codec, std::string("L24"));
+  CHECK(minimal.endpoints[0].aes67.auto_create_streams);
+}
+
 TEST_CASE(util_db_conversions) {
   CHECK_NEAR(linear_to_dbfs(1.0), 0.0, 1e-9);
   CHECK_NEAR(linear_to_dbfs(0.5), -6.0206, 1e-3);

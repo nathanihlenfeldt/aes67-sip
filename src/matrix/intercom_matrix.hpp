@@ -48,6 +48,24 @@ struct MatrixPlan {
   bool empty() const { return lines.empty(); }
 };
 
+/**
+ * The device channels the declared endpoint shapes claim.
+ *
+ * One declared channel is one device channel, and the two directions are
+ * independent, so the width the device has to be opened at is the highest channel
+ * index the shapes reach in either direction, plus one.  Nothing here counts
+ * endpoints or assumes a shape: halving the declared shapes halves this, and a
+ * site that declares four channels needs a four channel device whatever the
+ * endpoints are called.
+ */
+struct MatrixChannelUse {
+  unsigned capture{0};   // talk channels: device capture channels
+  unsigned playback{0};  // listen channels: device playback channels
+
+  /** The device width that covers both directions. */
+  unsigned device_channels() const;
+};
+
 struct MatrixMemberStatus {
   std::string endpoint;
   std::string endpoint_name;
@@ -88,9 +106,20 @@ class IntercomMatrix {
   IntercomMatrix(const IntercomMatrix&) = delete;
   IntercomMatrix& operator=(const IntercomMatrix&) = delete;
 
-  /** Resolves a configuration into a plan, without touching the running routing. */
+  /**
+   * Resolves a configuration into a plan, without touching the running routing.
+   *
+   * Refuses the configuration - false, with the declared and the available
+   * totals in `error` - when the declared endpoint shapes need a wider device
+   * than `audio.channels` opens, rather than routing the channels that happen to
+   * fit.  A channel outside the opened device is a member that silently never
+   * arrives, which is the failure this is here to prevent.
+   */
   static bool plan_from_config(const Config& config, MatrixPlan* plan,
                                std::string* error);
+
+  /** The device channels a plan's declared shapes claim. */
+  static MatrixChannelUse channel_use(const MatrixPlan& plan);
 
   /** Replaces the running routing. Call from any control thread. */
   bool configure(const MatrixPlan& plan, std::string* error);

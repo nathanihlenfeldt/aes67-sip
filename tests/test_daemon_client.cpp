@@ -20,7 +20,73 @@ LineConfig make_line(int id, const std::vector<unsigned>& channels) {
   return Config::parse_line(document);
 }
 
+EndpointConfig make_endpoint(const std::string& id, const std::string& name,
+                             std::vector<unsigned> talk,
+                             std::vector<unsigned> listen) {
+  EndpointConfig endpoint;
+  endpoint.id = id;
+  endpoint.name = name;
+  endpoint.talk_channels = std::move(talk);
+  endpoint.listen_channels = std::move(listen);
+  return endpoint;
+}
+
 }  // namespace
+
+TEST_CASE(one_stream_per_endpoint_direction_carrying_all_its_channels) {
+  const Aes67DaemonConfig daemon_config = fake_daemon_config();
+  const EndpointConfig endpoint =
+      make_endpoint("pack-01", "Camera 1", {4, 5}, {6, 7});
+
+  // Appliance -> endpoint: ONE source carrying both of the pack's listen
+  // channels, named so the routing grid reads as the endpoints, not as ids.
+  const json source = DaemonClient::make_endpoint_source(daemon_config, endpoint);
+  CHECK_EQ(source.at("map"), json({6, 7}));
+  CHECK_EQ(source.at("name").get<std::string>(), std::string("Camera 1 (listen)"));
+  CHECK_EQ(source.at("codec"), json("L24"));
+  CHECK_EQ(source.at("payload_type").get<int>(), 98);
+  CHECK(source.contains("enabled"));
+
+  // Endpoint -> appliance: ONE sink carrying both of its talk channels, and it
+  // needs the endpoint's own SDP exactly like a line's sink does.
+  json sink;
+  std::string error;
+  CHECK(!DaemonClient::make_endpoint_sink(daemon_config, endpoint, "", &sink,
+                                          &error));
+  CHECK(!error.empty());
+
+  const std::string sdp =
+      "v=0\ns=Endpoint\nm=audio 5004 RTP/AVP 98\na=rtpmap:98 L16/48000/2\n";
+  CHECK(DaemonClient::make_endpoint_sink(daemon_config, endpoint, sdp, &sink,
+                                         &error));
+  CHECK_EQ(sink.at("map"), json({4, 5}));
+  CHECK_EQ(sink.at("name").get<std::string>(), std::string("Camera 1 (talk)"));
+  CHECK_EQ(sink.at("sdp").get<std::string>(), sdp);
+
+  // The names carry the endpoint: a human matches them without a lookup table.
+  CHECK(DaemonClient::endpoint_talk_stream_name(endpoint).find("Camera 1") !=
+        std::string::npos);
+  CHECK(DaemonClient::endpoint_listen_stream_name(endpoint).find("Camera 1") !=
+        std::string::npos);
+  CHECK(DaemonClient::endpoint_talk_stream_name(endpoint) !=
+        DaemonClient::endpoint_listen_stream_name(endpoint));
+}
+
+TEST_CASE(endpoint_stream_names_fall_back_to_the_endpoint_id) {
+  // No name declared: the id is the name, so the streams are still readable.
+  const EndpointConfig endpoint = make_endpoint("pack-09", "", {0}, {1});
+  CHECK_EQ(DaemonClient::endpoint_talk_stream_name(endpoint),
+           std::string("pack-09 (talk)"));
+  CHECK_EQ(DaemonClient::endpoint_listen_stream_name(endpoint),
+           std::string("pack-09 (listen)"));
+
+  // Even an endpoint with neither name nor id gets a name rather than a bare
+  // "(talk)": the last resort, for an endpoint built in code rather than parsed
+  // from a configuration file.
+  const EndpointConfig unnamed = make_endpoint("", "", {0}, {1});
+  CHECK_EQ(DaemonClient::endpoint_talk_stream_name(unnamed),
+           std::string("endpoint (talk)"));
+}
 
 TEST_CASE(fake_daemon_reports_ptp_and_version) {
   auto daemon = DaemonClient::create(fake_daemon_config());

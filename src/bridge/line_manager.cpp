@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <set>
 #include <sstream>
 
 #include "log.hpp"
@@ -90,9 +91,11 @@ int LineManager::line_count() const {
   return static_cast<int>(lines_.size());
 }
 
-std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
-                                              std::string* origin,
-                                              std::string* error) {
+std::string LineManager::resolve_remote_sdp(const std::string& remote_sdp,
+                                            const std::string& remote_source_id,
+                                            const std::string& subject,
+                                            std::string* origin,
+                                            std::string* error) {
   const auto set_origin = [origin](const std::string& value) {
     if (origin != nullptr) {
       *origin = value;
@@ -100,21 +103,20 @@ std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
   };
 
   // 1. an SDP pasted into the configuration wins
-  if (!trim(line.aes67.remote_sdp).empty()) {
+  if (!trim(remote_sdp).empty()) {
     set_origin("pasted");
-    return line.aes67.remote_sdp;
+    return remote_sdp;
   }
 
   // 2. a discovered SAP/mDNS source selected in the UI
-  if (!trim(line.aes67.remote_source_id).empty()) {
+  if (!trim(remote_source_id).empty()) {
     json discovered;
     std::string browse_error;
     if (daemon_->browse_sources("all", &discovered, &browse_error)) {
       const auto it = discovered.find("remote_sources");
       if (it != discovered.end() && it->is_array()) {
         for (const auto& source : *it) {
-          if (json_get<std::string>(source, "id", "") ==
-              line.aes67.remote_source_id) {
+          if (json_get<std::string>(source, "id", "") == remote_source_id) {
             const std::string sdp = json_get<std::string>(source, "sdp", "");
             if (!trim(sdp).empty()) {
               set_origin("discovered");
@@ -124,7 +126,7 @@ std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
         }
       }
       if (error != nullptr) {
-        *error = "discovered source '" + line.aes67.remote_source_id +
+        *error = subject + ": discovered source '" + remote_source_id +
                  "' is not currently announced";
       }
     } else if (error != nullptr) {
@@ -132,6 +134,26 @@ std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
     }
     set_origin("none");
     return {};
+  }
+
+  set_origin("none");
+  return {};
+}
+
+std::string LineManager::resolve_endpoint_sdp(const LineConfig& line,
+                                              std::string* origin,
+                                              std::string* error) {
+  const auto set_origin = [origin](const std::string& value) {
+    if (origin != nullptr) {
+      *origin = value;
+    }
+  };
+
+  const std::string remote = resolve_remote_sdp(
+      line.aes67.remote_sdp, line.aes67.remote_source_id,
+      "line " + std::to_string(line.id) + " (" + line.name + ")", origin, error);
+  if (!remote.empty()) {
+    return remote;
   }
 
   // 3. Nothing configured.  Looping our own source back lets the AES67 path be
@@ -241,6 +263,107 @@ void LineManager::configure_daemon_streams(const LineConfig& line) {
   }
 }
 
+void LineManager::configure_endpoint_streams() {
+  if (!config_->aes67_daemon.auto_configure) {
+    return;
+  }
+
+  // Which daemon ids are free: the lines' are configured by hand and must not be
+  // taken.  The endpoints take the lowest free ones in configuration order, one
+  // id per endpoint for both of its directions, so the ids do not depend on how
+  // many lines the site happens to have.  Ids are bookkeeping - what a human
+  // matches a stream on is its name, which carries the endpoint.
+  std::set<int> taken;
+  for (const auto& line : config_->lines) {
+    taken.insert(line.aes67.sink_id);
+    taken.insert(line.aes67.source_id);
+  }
+  int next_id = 0;
+  std::map<std::string, int> allocated;
+
+  for (const auto& endpoint : config_->endpoints) {
+    while (taken.count(next_id) > 0) {
+      ++next_id;
+    }
+    const int id = next_id++;
+    if (!endpoint.aes67.auto_create_streams) {
+      // Hand wired elsewhere (the daemon's own config, a vendor's tool): leave
+      // its streams exactly as they are, but keep the id out of circulation so
+      // the endpoints after it do not move.
+      LOG_INFO("endpoint ", endpoint.id,
+               ": aes67.auto_create_streams is off - leaving its AES67 streams "
+               "as they are");
+      continue;
+    }
+    std::string error;
+
+    // Appliance -> endpoint: the mixes the matrix writes for it, on one stream.
+    if (!endpoint.listen_channels.empty()) {
+      const json source =
+          DaemonClient::make_endpoint_source(config_->aes67_daemon, endpoint);
+      if (daemon_->put_source(id, source, &error)) {
+        LOG_INFO("endpoint ", endpoint.id, ": AES67 source ", id, " '",
+                 DaemonClient::endpoint_listen_stream_name(endpoint),
+                 "' configured (", endpoint.listen_channels.size(),
+                 " listen channel(s))");
+      } else {
+        LOG_WARN("endpoint ", endpoint.id, ": cannot configure AES67 source ", id,
+                 ": ", error);
+      }
+    }
+
+    // Endpoint -> appliance: one sink carrying all of its talk channels.  Like a
+    // line's sink it needs the endpoint's own SDP, and without one the sink is
+    // left alone rather than pointed at whatever we happen to have.
+    if (!endpoint.talk_channels.empty()) {
+      std::string sdp_origin;
+      std::string sdp_error;
+      const std::string remote_sdp = resolve_remote_sdp(
+          endpoint.aes67.remote_sdp, endpoint.aes67.remote_source_id,
+          "endpoint " + endpoint.id + " (" + endpoint.name + ")", &sdp_origin,
+          &sdp_error);
+      json sink;
+      if (!DaemonClient::make_endpoint_sink(config_->aes67_daemon, endpoint,
+                                            remote_sdp, &sink, &error)) {
+        LOG_WARN("endpoint ", endpoint.id, " (", endpoint.name, "): AES67 sink ",
+                 id, " not configured: ", error);
+      } else if (daemon_->put_sink(id, sink, &error)) {
+        LOG_INFO("endpoint ", endpoint.id, ": AES67 sink ", id, " '",
+                 DaemonClient::endpoint_talk_stream_name(endpoint),
+                 "' configured (", endpoint.talk_channels.size(),
+                 " talk channel(s), ", sdp_origin, " sdp)");
+      } else {
+        LOG_WARN("endpoint ", endpoint.id, ": cannot configure AES67 sink ", id,
+                 ": ", error);
+      }
+    }
+    // Remembered so the streams can be deleted if the endpoint is configured
+    // away: the configuration file is the source of truth, and a stream left
+    // behind would keep sending a mix nothing routes any more.
+    allocated[endpoint.id] = id;
+  }
+
+  remove_endpoint_streams(allocated);
+}
+
+void LineManager::remove_endpoint_streams(
+    const std::map<std::string, int>& allocated) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto& previous : endpoint_stream_ids_) {
+    if (allocated.count(previous.first) > 0) {
+      continue;
+    }
+    std::string error;
+    daemon_->delete_sink(previous.second, &error);
+    daemon_->delete_source(previous.second, &error);
+    LOG_INFO("endpoint ", previous.first,
+             ": no longer configured - its AES67 "
+             "streams (sink/source ",
+             previous.second, ") were deleted");
+  }
+  endpoint_stream_ids_ = allocated;
+}
+
 void LineManager::remove_daemon_streams(const LineConfig& line) {
   std::string error;
   daemon_->delete_sink(line.aes67.sink_id, &error);
@@ -248,6 +371,16 @@ void LineManager::remove_daemon_streams(const LineConfig& line) {
 }
 
 bool LineManager::apply_configuration(std::string* error) {
+  // The matrix plan is resolved *before* anything is touched, so a
+  // configuration whose declared channels do not fit the device is refused as a
+  // whole, with both totals, rather than applied down to the channels that
+  // happen to fit and leaving the rest of the site silently unheard.
+  MatrixPlan plan;
+  if (matrix_ != nullptr &&
+      !IntercomMatrix::plan_from_config(*config_, &plan, error)) {
+    return false;
+  }
+
   std::vector<LineConfig> lines;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -306,23 +439,21 @@ bool LineManager::apply_configuration(std::string* error) {
     }
     configure_daemon_streams(line);
   }
-  // The intercom matrix is configured from the same document: endpoints declare
-  // their shape and party lines name their members.  A matrix that cannot be
-  // applied is an error, not a warning: a mistyped binding would otherwise leave
-  // a department silent while the gateway reported success.
+  // The intercom matrix is applied from the plan resolved above: endpoints
+  // declare their shape and party lines name their members.  A matrix that
+  // cannot be applied is an error, not a warning: a mistyped binding would
+  // otherwise leave a department silent while the gateway reported success.
   if (matrix_ != nullptr) {
-    MatrixPlan plan;
-    std::string matrix_error;
-    if (!IntercomMatrix::plan_from_config(*config_, &plan, &matrix_error) ||
-        !matrix_->configure(plan, &matrix_error)) {
-      if (error != nullptr) {
-        *error = matrix_error;
-      }
+    if (!matrix_->configure(plan, error)) {
       return false;
     }
+    // And the channels it mixes are what the endpoints' streams carry: without
+    // the matrix those channels are nobody's routing, so nothing is provisioned.
+    configure_endpoint_streams();
   }
 
-  LOG_INFO("configuration applied: ", lines.size(), " line(s), SIP engine ",
+  LOG_INFO("configuration applied: ", lines.size(), " line(s), ",
+           config_->endpoints.size(), " endpoint(s), SIP engine ",
            engine_->engine_name());
   return true;
 }

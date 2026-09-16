@@ -92,6 +92,35 @@ class DaemonClient {
   static bool make_sink(const Aes67DaemonConfig& daemon_config,
                         const LineConfig& line, const std::string& remote_sdp,
                         json* sink, std::string* error);
+
+  /**
+   * Names of the two streams an endpoint is provisioned with.  Both carry the
+   * endpoint's own name and end in the direction the *endpoint* sees: `(talk)`
+   * for the stream it sends, `(listen)` for the one it receives.  That is what
+   * lets a human match a stream to an endpoint in a vendor's routing grid
+   * without a lookup table, so the names are part of the contract, not a log
+   * string.
+   */
+  static std::string endpoint_talk_stream_name(const EndpointConfig& endpoint);
+  static std::string endpoint_listen_stream_name(const EndpointConfig& endpoint);
+
+  /**
+   * One *source* for an endpoint: its listen channels, carrying all of them in a
+   * single stream.  Built from the endpoint's declared shape, so a two channel
+   * beltpack and a many channel console take the same path.
+   */
+  static json make_endpoint_source(const Aes67DaemonConfig& daemon_config,
+                                   const EndpointConfig& endpoint);
+
+  /**
+   * One *sink* for an endpoint: its talk channels, carrying all of them in a
+   * single stream.  Like a line's sink it needs the endpoint's own SDP; without
+   * one there is nothing to subscribe to and `error` says so.
+   */
+  static bool make_endpoint_sink(const Aes67DaemonConfig& daemon_config,
+                                 const EndpointConfig& endpoint,
+                                 const std::string& remote_sdp, json* sink,
+                                 std::string* error);
 };
 
 }  // namespace aes67sip

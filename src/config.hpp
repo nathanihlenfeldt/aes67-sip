@@ -146,6 +146,32 @@ struct LineConfig {
 };
 
 /**
+ * The AES67 streams one endpoint is provisioned with: **one per direction**,
+ * each carrying every channel of that direction rather than one stream per
+ * channel.
+ *
+ * The *sink* is the endpoint's talk stream (endpoint -> appliance); like a line's
+ * sink it describes the endpoint's own RTP stream, so it needs that endpoint's
+ * SDP - discovered by SAP/mDNS or pasted in.  The *source* is the endpoint's
+ * listen stream (appliance -> endpoint), carrying the mixes the matrix writes for
+ * it, and needs no remote description at all.
+ */
+struct EndpointAes67Config {
+  /**
+   * Base of both stream names; defaults to the endpoint's name.  The names carry
+   * the endpoint so a human can match a stream to an endpoint in a vendor's
+   * routing grid without a lookup table (see `DaemonClient`).
+   */
+  std::string stream_name;
+  bool auto_create_streams{true};
+  std::string codec{"L24"};      // payload our *source* advertises (L16, L24, ...)
+  std::string remote_source_id;  // discovered SAP/mDNS source: the endpoint's talk
+  std::string remote_sdp;        // ...or that stream's SDP pasted in
+  bool ignore_refclk_gmid{false};
+  bool refclk_ptp_traceable{false};
+};
+
+/**
  * An endpoint on the site, and the shape it presents to the matrix.
  *
  * Nothing here names a device model: an endpoint says how many talk channels it
@@ -158,6 +184,7 @@ struct EndpointConfig {
   std::string name;                       // defaults to the id
   std::vector<unsigned> talk_channels;    // device capture channels, one each
   std::vector<unsigned> listen_channels;  // device playback channels, one each
+  EndpointAes67Config aes67;              // the two streams it is provisioned
 };
 
 /**

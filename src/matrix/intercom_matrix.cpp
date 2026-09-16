@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 
 #include "log.hpp"
 #include "util.hpp"
@@ -27,8 +28,28 @@ IntercomMatrix::IntercomMatrix(unsigned sample_rate)
 
 IntercomMatrix::~IntercomMatrix() = default;
 
+unsigned MatrixChannelUse::device_channels() const {
+  return std::max(capture, playback);
+}
+
+MatrixChannelUse IntercomMatrix::channel_use(const MatrixPlan& plan) {
+  MatrixChannelUse use;
+  for (const auto& endpoint : plan.endpoints) {
+    for (const unsigned channel : endpoint.talk_channels) {
+      use.capture = std::max(use.capture, channel + 1);
+    }
+    for (const unsigned channel : endpoint.listen_channels) {
+      use.playback = std::max(use.playback, channel + 1);
+    }
+  }
+  return use;
+}
+
 bool IntercomMatrix::plan_from_config(const Config& config, MatrixPlan* plan,
                                       std::string* error) {
+  if (error != nullptr) {
+    error->clear();
+  }
   if (plan == nullptr) {
     if (error != nullptr) {
       *error = "internal error: matrix plan pointer is null";
@@ -44,6 +65,26 @@ bool IntercomMatrix::plan_from_config(const Config& config, MatrixPlan* plan,
     planned.listen_channels = endpoint.listen_channels;
     resolved.endpoints.push_back(std::move(planned));
   }
+
+  // The declared shapes decide how wide the device has to be.  Refusing here -
+  // with both totals - is what stops a configuration that asks for more channels
+  // than the device carries from being routed down to the ones that happen to
+  // fit, which would leave the rest of the site silently unheard.
+  const MatrixChannelUse channels_used = channel_use(resolved);
+  const unsigned available = config.audio.channels;
+  if (channels_used.device_channels() > available) {
+    if (error != nullptr) {
+      std::ostringstream message;
+      message << "the declared endpoint shapes need "
+              << channels_used.device_channels() << " device channels ("
+              << channels_used.capture << " capture, " << channels_used.playback
+              << " playback) but audio.channels opens " << available
+              << " - raise audio.channels or declare fewer channels";
+      *error = message.str();
+    }
+    return false;
+  }
+
   for (const auto& line : config.party_lines) {
     MatrixLinePlan planned;
     planned.id = line.id;
