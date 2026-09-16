@@ -176,6 +176,222 @@ TEST_CASE(matrix_without_lines_mixes_nothing) {
   }
 }
 
+TEST_CASE(matrix_binds_each_channel_pair_independently) {
+  MatrixPlan plan;
+  // A two pair endpoint: pair 0 on one line, pair 1 on another, so it talks on
+  // one line and hears two different mixes on its two listen channels.
+  plan.endpoints.push_back(endpoint("a", {0}, {0}));
+  plan.endpoints.push_back(endpoint("b", {3}, {3}));
+  plan.endpoints.push_back(endpoint("dual", {1, 2}, {1, 2}));
+  plan.lines.push_back(line("pl1", {member("a", 0, 0), member("dual", 0, 0)}));
+  plan.lines.push_back(line("pl2", {member("b", 0, 0), member("dual", 1, 1)}));
+
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(plan, &error));
+
+  // "a" talks: only the dual endpoint's pair 0 hears it, on its own channel.
+  std::vector<float> capture(4 * kFrames, 0.0F);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    capture[frame * 4 + 0] = 0.5F;
+  }
+  std::vector<float> playback(4 * kFrames, 0.0F);
+  matrix.process(capture.data(), playback.data(), 4, kFrames);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback[frame * 4 + 1], 0.5, 1e-4);  // pair 0 hears line 1
+    CHECK_NEAR(playback[frame * 4 + 2], 0.0, 1e-6);  // pair 1 hears nothing yet
+  }
+
+  // "b" talks: the same endpoint hears it on the *other* channel, and line 1's
+  // mix has not leaked into it.
+  std::vector<float> second(4 * kFrames, 0.0F);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    second[frame * 4 + 3] = 0.5F;
+  }
+  std::vector<float> playback2(4 * kFrames, 0.0F);
+  matrix.process(second.data(), playback2.data(), 4, kFrames);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback2[frame * 4 + 2], 0.5, 1e-4);  // pair 1 hears line 2
+    CHECK_NEAR(playback2[frame * 4 + 1], 0.0, 1e-6);  // pair 0 is silent
+    CHECK_NEAR(playback2[frame * 4 + 0], 0.0, 1e-6);  // "a" does not hear "b"
+  }
+}
+
+TEST_CASE(matrix_counts_an_endpoint_on_one_line_once_and_never_itself) {
+  MatrixPlan plan;
+  // The same endpoint joins the same line through both pairs: it must still hear
+  // the other members once, and none of its own contributions.
+  plan.endpoints.push_back(endpoint("a", {0}, {0}));
+  plan.endpoints.push_back(endpoint("dual", {1, 2}, {1, 2}));
+  plan.lines.push_back(
+      line("pl1", {member("a", 0, 0), member("dual", 0, 0), member("dual", 1, 1)}));
+
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(plan, &error));
+
+  std::vector<float> capture(3 * kFrames, 0.0F);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    capture[frame * 3 + 0] = 0.5F;  // "a" talks
+    capture[frame * 3 + 1] = 0.5F;  // the dual endpoint talks on pair 0
+  }
+  std::vector<float> playback(3 * kFrames, 0.0F);
+  matrix.process(capture.data(), playback.data(), 3, kFrames);
+
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback[frame * 3 + 1], 0.5, 1e-4);  // pair 0 hears "a" once
+    CHECK_NEAR(playback[frame * 3 + 2], 0.5, 1e-4);  // pair 1 hears "a" once too
+  }
+}
+
+TEST_CASE(matrix_drives_an_unbound_listen_channel_of_a_bound_endpoint_silent) {
+  MatrixPlan plan;
+  // Only pair 0 is bound; pair 1's listen channel is declared but unbound, so it
+  // must come out silent rather than replaying what the buffer held.
+  plan.endpoints.push_back(endpoint("a", {0}, {0}));
+  plan.endpoints.push_back(endpoint("dual", {1, 2}, {1, 2}));
+  plan.lines.push_back(line("pl1", {member("a", 0, 0), member("dual", 0, 0)}));
+
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(plan, &error));
+
+  std::vector<float> capture(3 * kFrames, 0.0F);
+  std::vector<float> playback(3 * kFrames, 1.0F);  // stale audio everywhere
+  matrix.process(capture.data(), playback.data(), 3, kFrames);
+
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback[frame * 3 + 1], 0.0, 1e-6);  // pair 0 hears nobody
+    CHECK_NEAR(playback[frame * 3 + 2], 0.0, 1e-6);  // pair 1 is unbound: silence
+  }
+}
+
+TEST_CASE(matrix_ignores_an_unbound_talk_channel) {
+  MatrixPlan plan;
+  // "listener" is declared with two talk channels but bound as listen-only: its
+  // capture channels must contribute nothing to anybody.
+  plan.endpoints.push_back(endpoint("a", {0}, {2}));
+  plan.endpoints.push_back(endpoint("listener", {1, 3}, {1}));
+  plan.lines.push_back(line("pl1", {member("a", 0, 0), member("listener", -1, 0)}));
+
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(plan, &error));
+
+  std::vector<float> capture(4 * kFrames, 0.0F);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    capture[frame * 4 + 0] = 0.5F;  // "a" talks
+    capture[frame * 4 + 1] =
+        1.0F;  // the listener's own capture channels carry audio
+    capture[frame * 4 + 3] = 1.0F;
+  }
+  std::vector<float> playback(4 * kFrames, 0.0F);
+  matrix.process(capture.data(), playback.data(), 4, kFrames);
+
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback[frame * 4 + 2], 0.0,
+               1e-6);  // "a" does not hear the unbound talk
+    CHECK_NEAR(playback[frame * 4 + 1], 0.5, 1e-4);  // the listener hears "a"
+  }
+}
+
+TEST_CASE(matrix_binds_each_talk_channel_to_its_own_line) {
+  MatrixPlan plan;
+  plan.endpoints.push_back(endpoint("a", {0}, {0}));
+  plan.endpoints.push_back(endpoint("b", {3}, {3}));
+  plan.endpoints.push_back(endpoint("dual", {1, 2}, {1, 2}));
+  plan.lines.push_back(line("pl1", {member("a", 0, 0), member("dual", 0, 0)}));
+  plan.lines.push_back(line("pl2", {member("b", 0, 0), member("dual", 1, 1)}));
+
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(plan, &error));
+
+  // The dual endpoint talks on pair 0: line 1 hears it, line 2 must not.
+  std::vector<float> pair0(4 * kFrames, 0.0F);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    pair0[frame * 4 + 1] = 0.5F;
+  }
+  std::vector<float> playback(4 * kFrames, 0.0F);
+  matrix.process(pair0.data(), playback.data(), 4, kFrames);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback[frame * 4 + 0], 0.5, 1e-4);  // "a" on line 1 hears it
+    CHECK_NEAR(playback[frame * 4 + 3], 0.0, 1e-6);  // "b" on line 2 does not
+  }
+
+  // And on pair 1: line 2 hears it, line 1 must not.
+  std::vector<float> pair1(4 * kFrames, 0.0F);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    pair1[frame * 4 + 2] = 0.5F;
+  }
+  std::vector<float> playback2(4 * kFrames, 0.0F);
+  matrix.process(pair1.data(), playback2.data(), 4, kFrames);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback2[frame * 4 + 3], 0.5, 1e-4);  // "b" on line 2 hears it
+    CHECK_NEAR(playback2[frame * 4 + 0], 0.0, 1e-6);  // "a" on line 1 does not
+  }
+}
+
+TEST_CASE(matrix_counts_a_member_bound_twice_on_one_line_once) {
+  MatrixPlan plan;
+  // One microphone bound to the same line through two listen channels: the other
+  // members must hear it once, and it must hear the line on both its channels.
+  plan.endpoints.push_back(endpoint("a", {0}, {0}));
+  plan.endpoints.push_back(endpoint("dual", {1}, {1, 2}));
+  plan.lines.push_back(
+      line("pl1", {member("a", 0, 0), member("dual", 0, 0), member("dual", 0, 1)}));
+
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(plan, &error));
+
+  std::vector<float> capture(3 * kFrames, 0.0F);
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    capture[frame * 3 + 1] = 0.5F;  // the dual endpoint talks
+  }
+  std::vector<float> playback(3 * kFrames, 0.0F);
+  matrix.process(capture.data(), playback.data(), 3, kFrames);
+
+  for (unsigned frame = 0; frame < kFrames; ++frame) {
+    CHECK_NEAR(playback[frame * 3 + 0], 0.5, 1e-4);  // "a" hears it once, not twice
+    CHECK_NEAR(playback[frame * 3 + 1], 0.0, 1e-6);  // pair 0 hears no echo
+    CHECK_NEAR(playback[frame * 3 + 2], 0.0, 1e-6);  // pair 1 hears no echo either
+  }
+}
+
+TEST_CASE(matrix_status_reports_per_channel_bindings) {
+  MatrixPlan plan;
+  plan.endpoints.push_back(endpoint("a", {0}, {0}));
+  plan.endpoints.push_back(endpoint("dual", {1, 2}, {1, 2}));
+  plan.lines.push_back(line("pl1", {member("a", 0, 0), member("dual", 0, 0)}));
+  plan.lines.push_back(line("pl2", {member("dual", 1, 1)}));
+  plan.lines.push_back(line("pl3", {member("a", -1, -1)}));
+
+  IntercomMatrix matrix;
+  std::string error;
+  CHECK(matrix.configure(plan, &error));
+
+  const auto status = matrix.status();
+  CHECK_EQ(status.size(), 3U);
+
+  // Members carry the channels they bound, not just the endpoint that owns them.
+  CHECK_EQ(status[0].members[0].endpoint, std::string("a"));
+  CHECK_EQ(status[0].members[0].talk_channel, 0);
+  CHECK_EQ(status[0].members[0].listen_channel, 0);
+  CHECK_EQ(status[0].members[1].endpoint, std::string("dual"));
+  CHECK_EQ(status[0].members[1].talk_channel, 0);
+  CHECK_EQ(status[0].members[1].listen_channel, 0);
+
+  // The same endpoint appears on the other line through its second pair.
+  CHECK_EQ(status[1].members[0].endpoint, std::string("dual"));
+  CHECK_EQ(status[1].members[0].talk_channel, 1);
+  CHECK_EQ(status[1].members[0].listen_channel, 1);
+
+  // An endpoint bound to neither direction reports both channels as absent.
+  CHECK_EQ(status[2].members[0].talk_channel, -1);
+  CHECK_EQ(status[2].members[0].listen_channel, -1);
+}
+
 TEST_CASE(matrix_drives_an_unrouted_listen_channel_silent) {
   MatrixPlan plan;
   // "unrouted" is declared with a listen channel but is on no party line at all:

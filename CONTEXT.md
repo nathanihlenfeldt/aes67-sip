@@ -29,7 +29,9 @@ _Avoid_: panel, device, station, intercom
 
 **Channel**:
 One channel of the gateway's RAVENNA audio device: the unit a daemon sink or source
-is mapped onto.
+is mapped onto. An endpoint's own talk and listen channels are a different thing —
+the slots in the shape that endpoint declares. A party line binding names one of
+those slots, and the endpoint's shape is what decides which device channel it is.
 _Avoid_: port, lane, bus
 
 **Stream**:

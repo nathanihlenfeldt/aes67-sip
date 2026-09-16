@@ -48,8 +48,11 @@ struct MatrixPlan {
 struct MatrixMemberStatus {
   std::string endpoint;
   std::string endpoint_name;
+  /** The endpoint's own channel indices, or -1 where that direction is unbound. */
+  int talk_channel{-1};
+  int listen_channel{-1};
   double contribution_db{0.0};
-  double level_dbfs{-1000.0};
+  double level_dbfs{kSilenceDbfs};
   bool arriving{false};
 };
 
@@ -142,10 +145,31 @@ class IntercomMatrix {
     LevelMeter meter;
   };
 
+  /**
+   * One distinct contribution a line receives: an endpoint's talk channel, once,
+   * however many member entries bind it.  A beltpack that talks on two channels
+   * into the same line is heard once per channel; one whose mic is bound twice is
+   * still heard once.
+   */
+  struct Contribution {
+    std::string endpoint_id;
+    unsigned capture_channel{0};
+    float gain{1.0F};
+    bool mute{false};
+  };
+
+  /** One distinct mix a line feeds: an endpoint's listen channel, once. */
+  struct Listener {
+    std::string endpoint_id;
+    unsigned playback_channel{0};
+  };
+
   struct RuntimeLine {
     std::string id;
     std::string name;
-    std::vector<RuntimeMember> members;
+    std::vector<RuntimeMember> members;  // as configured, for the status view
+    std::vector<Contribution> contributions;
+    std::vector<Listener> listeners;
   };
 
   struct Runtime {

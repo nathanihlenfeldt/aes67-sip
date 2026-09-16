@@ -144,6 +144,38 @@ bool IntercomMatrix::configure(const MatrixPlan& plan, std::string* error) {
         resolved.playback_channel =
             endpoint->listen_channels[static_cast<size_t>(member.listen_channel)];
       }
+
+      // A line feeds each distinct listen channel once and receives each distinct
+      // talk channel once, however many member entries happen to bind them: an
+      // endpoint heard through the same channel twice would otherwise be summed
+      // twice, which is a misconfiguration waiting to be measured as +6 dB.
+      if (resolved.talk_channel >= 0 &&
+          std::none_of(resolved_line.contributions.begin(),
+                       resolved_line.contributions.end(),
+                       [&resolved](const Contribution& existing) {
+                         return existing.capture_channel ==
+                                    resolved.capture_channel &&
+                                existing.endpoint_id == resolved.endpoint_id;
+                       })) {
+        Contribution contribution;
+        contribution.endpoint_id = resolved.endpoint_id;
+        contribution.capture_channel = resolved.capture_channel;
+        contribution.gain = resolved.gain;
+        contribution.mute = resolved.mute;
+        resolved_line.contributions.push_back(contribution);
+      }
+      if (resolved.listen_channel >= 0 &&
+          std::none_of(
+              resolved_line.listeners.begin(), resolved_line.listeners.end(),
+              [&resolved](const Listener& existing) {
+                return existing.playback_channel == resolved.playback_channel &&
+                       existing.endpoint_id == resolved.endpoint_id;
+              })) {
+        Listener listener;
+        listener.endpoint_id = resolved.endpoint_id;
+        listener.playback_channel = resolved.playback_channel;
+        resolved_line.listeners.push_back(listener);
+      }
     }
     runtime->lines.push_back(std::move(resolved_line));
   }
@@ -196,39 +228,44 @@ void IntercomMatrix::process(const float* capture, float* playback,
                           static_cast<double>(sample_rate_);
 
   for (const auto& line : runtime->lines) {
-    for (const auto& member : line.members) {
-      if (member.listen_channel >= 0 && member.playback_channel < channels) {
-        for (unsigned frame = 0; frame < frames; ++frame) {
-          const size_t base = static_cast<size_t>(frame) * channels;
-          double sum = 0.0;
-          for (const auto& contributor : line.members) {
-            if (contributor.talk_channel < 0 ||
-                contributor.capture_channel >= channels) {
-              continue;
-            }
-            // Mix-minus by construction: never the listener's own endpoint, and a
-            // muted member contributes nothing without changing what it hears.
-            if (contributor.endpoint_id == member.endpoint_id || contributor.mute) {
-              continue;
-            }
-            sum +=
-                static_cast<double>(capture[base + contributor.capture_channel]) *
-                contributor.gain;
+    // The mixes: one per distinct listen channel this line feeds.
+    for (const auto& listener : line.listeners) {
+      if (listener.playback_channel >= channels) {
+        continue;
+      }
+      for (unsigned frame = 0; frame < frames; ++frame) {
+        const size_t base = static_cast<size_t>(frame) * channels;
+        double sum = 0.0;
+        for (const auto& contributor : line.contributions) {
+          if (contributor.mute || contributor.capture_channel >= channels) {
+            continue;
           }
-          playback[base + member.playback_channel] += static_cast<float>(sum);
+          // Mix-minus by construction: never the listener's own endpoint, and a
+          // muted member contributes nothing without changing what it hears.
+          if (contributor.endpoint_id == listener.endpoint_id) {
+            continue;
+          }
+          sum += static_cast<double>(capture[base + contributor.capture_channel]) *
+                 contributor.gain;
         }
+        playback[base + listener.playback_channel] += static_cast<float>(sum);
       }
+    }
 
-      if (member.talk_channel >= 0 && member.capture_channel < channels) {
-        double peak = 0.0;
-        for (unsigned frame = 0; frame < frames; ++frame) {
-          peak = std::max(peak, std::fabs(static_cast<double>(
-                                    capture[static_cast<size_t>(frame) * channels +
-                                            member.capture_channel])));
-        }
-        member.meter.value.store(
-            hold_peak(member.meter.value.load(), linear_to_dbfs(peak), decay_db));
+    // The meters: per configured binding, so the status view can name the channel
+    // that went quiet.
+    for (const auto& member : line.members) {
+      if (member.talk_channel < 0 || member.capture_channel >= channels) {
+        continue;
       }
+      double peak = 0.0;
+      for (unsigned frame = 0; frame < frames; ++frame) {
+        peak = std::max(peak, std::fabs(static_cast<double>(
+                                  capture[static_cast<size_t>(frame) * channels +
+                                          member.capture_channel])));
+      }
+      member.meter.value.store(
+          hold_peak(member.meter.value.load(), linear_to_dbfs(peak), decay_db));
     }
   }
 }
@@ -247,6 +284,8 @@ std::vector<MatrixLineStatus> IntercomMatrix::status() const {
       MatrixMemberStatus member_status;
       member_status.endpoint = member.endpoint_id;
       member_status.endpoint_name = member.endpoint_name;
+      member_status.talk_channel = member.talk_channel;
+      member_status.listen_channel = member.listen_channel;
       member_status.contribution_db = member.contribution_db;
       member_status.level_dbfs = member.meter.value.load();
       member_status.arriving = member_status.level_dbfs > kArrivalThresholdDbfs;

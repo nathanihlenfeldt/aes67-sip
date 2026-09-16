@@ -218,6 +218,9 @@ TEST_CASE(rest_api_reports_party_lines_and_their_members) {
   const json first = member_status(status, 0, 0);
   CHECK_EQ(first.at("endpoint").get<std::string>(), std::string("a"));
   CHECK_EQ(first.at("name").get<std::string>(), std::string("Camera 1"));
+  // The bindings travel too, so the UI can show which channel feeds which line.
+  CHECK_EQ(first.at("talk_channel").get<int>(), 0);
+  CHECK_EQ(first.at("listen_channel").get<int>(), 0);
   // The contribution level travels configuration -> plan -> status untouched.
   CHECK_NEAR(first.at("contribution_db").get<double>(), -3.0, 1e-9);
   CHECK(first.at("level_dbfs").get<double>() > -60.0);

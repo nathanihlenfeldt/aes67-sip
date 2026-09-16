@@ -166,6 +166,8 @@ json ApiServer::party_lines_status() const {
     for (const auto& member : line.members) {
       members.push_back(json{{"endpoint", member.endpoint},
                              {"name", member.endpoint_name},
+                             {"talk_channel", member.talk_channel},
+                             {"listen_channel", member.listen_channel},
                              {"contribution_db", member.contribution_db},
                              {"level_dbfs", member.level_dbfs},
                              {"arriving", member.arriving}});

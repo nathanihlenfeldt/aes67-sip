@@ -96,19 +96,20 @@ Single poll endpoint used by the UI.
 Levels are dBFS floats; silence is serialised as `null`.
 
 `party_lines[]` reports the intercom matrix: each party line with its members, and
-for each member the endpoint that owns it, that member's contribution level, the
-held level of its audio and whether that audio is currently arriving. It is an empty
-array when no party lines are declared, which is also how a gateway that only
-bridges SIP lines reports itself.
+for each member the endpoint that owns it, the endpoint's own channel indices it
+bound (`talk_channel` / `listen_channel`, each `-1` where that direction is
+unbound), that member's contribution level, the held level of its audio and whether
+that audio is currently arriving. It is an empty array when no party lines are
+declared, which is also how a gateway that only bridges SIP lines reports itself.
 
 ```json
 "party_lines": [
   { "id": "cameras", "name": "Cameras",
     "members": [
-      { "endpoint": "a", "name": "Camera 1", "contribution_db": 0.0,
-        "level_dbfs": -6.0, "arriving": true },
-      { "endpoint": "b", "name": "Camera 2", "contribution_db": -3.0,
-        "level_dbfs": -1000.0, "arriving": false }
+      { "endpoint": "a", "name": "Camera 1", "talk_channel": 0, "listen_channel": 0,
+        "contribution_db": 0.0, "level_dbfs": -6.0, "arriving": true },
+      { "endpoint": "b", "name": "Camera 2", "talk_channel": 1, "listen_channel": 1,
+        "contribution_db": -3.0, "level_dbfs": -1000.0, "arriving": false }
     ] }
 ]
 ```
