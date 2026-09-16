@@ -60,6 +60,13 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
   /** One line, shaped exactly like the `lines[]` entries of /api/status. */
   json line_status(int line_id) const;
   json lines_status() const;
+  /**
+   * The off-site conference leg, as `status.conference`: its call state, the
+   * account and target it dials, why it is not up, and the levels in each
+   * direction.  Present even when no leg is configured, so a UI can tell "not
+   * configured" from "configured but down".
+   */
+  json conference_status() const;
   /** Configuration view of one line (`GET /api/lines/{id}/config`). */
   bool line_config(int line_id, json* config, std::string* error) const;
 
@@ -87,6 +94,13 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
  private:
   struct LineRuntime {
     LineConfig config;
+    /**
+     * The conference leg: a line to the SIP engine whose media is the matrix's
+     * conference sides instead of RAVENNA channels.  It is kept out of `lines[]`,
+     * the line editor and the per-line self-test, because none of those make sense
+     * for it; `conference_status()` is its view.
+     */
+    bool is_conference{false};
     LineState state{LineState::kIdle};
     int state_code{0};
     std::string detail;
@@ -110,6 +124,13 @@ class LineManager : public SipEngineCallback, public SipMediaSource {
 
   void supervise();
   void apply_line_to_router(const LineConfig& line);
+  /**
+   * Creates, refreshes or removes the conference leg: a call to the off-site
+   * conference whose media is the matrix's conference sides.  It is registered
+   * with the SIP engine and the router like a line, so the supervisor keeps it up
+   * and reports why it is not - but it owns no daemon streams and no channels.
+   */
+  void apply_conference();
   /** Creates or updates the daemon sink/source of a line. */
   void configure_daemon_streams(const LineConfig& line);
   void remove_daemon_streams(const LineConfig& line);

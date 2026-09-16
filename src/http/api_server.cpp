@@ -152,6 +152,7 @@ json ApiServer::build_status() const {
   status["sip"] = sip;
 
   status["lines"] = lines_->lines_status();
+  status["conference"] = lines_->conference_status();
   status["party_lines"] = party_lines_status();
   return status;
 }
@@ -223,7 +224,7 @@ void ApiServer::register_routes() {
               // half-applied edit.
               Config candidate = *config_;
               candidate.merge(patch);
-              if (!validate_configuration(candidate, &error)) {
+              if (!validate_configuration(candidate, nullptr, &error)) {
                 reply_error(response, 400, error);
                 return;
               }

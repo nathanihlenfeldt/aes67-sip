@@ -930,12 +930,38 @@ TEST_CASE(matrix_refuses_a_binding_to_an_endpoint_that_does_not_exist) {
   CHECK(error.find("talk_channel 1") != std::string::npos);
 }
 
+TEST_CASE(matrix_refuses_a_conference_leg_that_could_not_be_dialled) {
+  Config config = valid_matrix_config();
+  config.conference.enabled = true;
+
+  std::string error;
+  // Enabled with nowhere to dial: refused where the configuration is applied.
+  CHECK(!validate_configuration(config, nullptr, &error));
+  CHECK(error.find("conference leg is enabled but has no target") !=
+        std::string::npos);
+
+  config.conference.target = "sip:conf@pbx.example.com";
+  CHECK(validate_configuration(config, nullptr, &error));
+  CHECK(error.empty());
+
+  // ...and with an account nobody declares, which would register nowhere.
+  config.conference.account = "ghost";
+  CHECK(!validate_configuration(config, nullptr, &error));
+  CHECK(error.find("account 'ghost'") != std::string::npos);
+
+  // The reserved id belongs to the leg: a configured line may not take it.
+  config.conference.enabled = false;
+  config.lines[0].id = kConferenceLineId;
+  CHECK(!validate_configuration(config, nullptr, &error));
+  CHECK(error.find("reserved for the conference leg") != std::string::npos);
+}
+
 TEST_CASE(matrix_accepts_a_valid_configuration_unchanged) {
   Config config = valid_matrix_config();
   config.party_lines[0].claims_conference = true;
 
   std::string error;
-  CHECK(validate_configuration(config, &error));
+  CHECK(validate_configuration(config, nullptr, &error));
   CHECK(error.empty());
 
   // "Loads unchanged" means what was declared is what the plan carries.
@@ -956,7 +982,7 @@ TEST_CASE(matrix_accepts_a_valid_configuration_unchanged) {
   // including one that declares endpoints nobody has routed yet.
   Config none = Config::from_json(json::object());
   none.endpoints = config.endpoints;
-  CHECK(validate_configuration(none, &error));
+  CHECK(validate_configuration(none, nullptr, &error));
   CHECK(error.empty());
   MatrixPlan empty_plan;
   CHECK(IntercomMatrix::plan_from_config(none, &empty_plan, &error));

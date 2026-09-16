@@ -369,6 +369,30 @@ CallStatus StubSipEngine::call_status(int line_id) const {
   return it == impl_->lines.end() ? CallStatus{} : it->second.call;
 }
 
+bool StubSipEngine::simulate_call_failure(int line_id, const std::string& reason,
+                                          std::string* error) {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  const auto it = impl_->lines.find(line_id);
+  if (it == impl_->lines.end()) {
+    if (error) {
+      *error = "unknown line " + std::to_string(line_id);
+    }
+    return false;
+  }
+  Impl::LineRuntime& line = it->second;
+  const bool was_in_call = line.state == LineState::kInCall;
+  line.call = CallStatus{};
+  line.call.active = false;
+  line.call.state = "failed";
+  line.hold = false;
+  line.inbound = false;
+  if (was_in_call && impl_->callback != nullptr) {
+    impl_->callback->on_media_stop(line.config.id);
+  }
+  impl_->notify_state(line, LineState::kError, 486, reason);
+  return true;
+}
+
 bool StubSipEngine::simulate_incoming_call(int line_id,
                                            const std::string& remote_uri,
                                            std::string* error) {

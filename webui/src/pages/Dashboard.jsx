@@ -33,8 +33,14 @@ export default function Dashboard() {
   const aes67 = status?.aes67 || {};
   const ptp = aes67.ptp || {};
   const sip = status?.sip || {};
+  const conference = status?.conference || {};
   const lines = arr(status?.lines);
   const accounts = arr(sip.accounts);
+  // The party lines that claim the conference, which is what decides whether the
+  // off-site leg carries anything either way.
+  const claiming = arr(status?.party_lines)
+    .filter((line) => line?.claims_conference)
+    .map((line) => line.name || line.id);
 
   async function run(lineId, fn) {
     setBusyLine(lineId);
@@ -173,6 +179,51 @@ export default function Dashboard() {
           </div>
         </Card>
       </div>
+      <Card
+        title="Conference"
+        subtitle={
+          conference.enabled
+            ? conference.target || 'no target'
+            : 'not configured — no off-site leg'
+        }
+      >
+        {conference.enabled ? (
+          <>
+            <div className="field-row align-center">
+              <StatusPill
+                state={conference.state}
+                title={conference.detail || 'the off-site call'}
+              />
+              <span className="muted small">
+                {conference.detail || (conference.state === 'in_call' ? 'in call' : '')}
+              </span>
+            </div>
+            <KV label="Account" mono>
+              {conference.account || '—'}
+            </KV>
+            <KV label="Party lines on the call">
+              {claiming.length ? claiming.join(', ') : 'none claim it'}
+            </KV>
+            <div className="field-row">
+              <label className="field">
+                <span className="field-label">to conference</span>
+                <LevelMeter level={conference.levels?.to_conference_dbfs} compact />
+              </label>
+              <label className="field">
+                <span className="field-label">from conference</span>
+                <LevelMeter level={conference.levels?.from_conference_dbfs} compact />
+              </label>
+            </div>
+          </>
+        ) : (
+          <div className="empty">
+            No off-site conference leg is configured. Set <span className="mono">conference.enabled</span>{' '}
+            and its <span className="mono">target</span>, and tick <em>conference</em> on the party
+            lines that should reach it.
+          </div>
+        )}
+      </Card>
+
       <Card title="Lines" subtitle="live call state and levels" bodyClass="flush">
         {lines.length === 0 ? (
           <div className="empty">No lines reported by the gateway.</div>

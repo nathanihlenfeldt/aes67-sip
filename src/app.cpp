@@ -207,6 +207,14 @@ int App::run() {
     return 1;
   }
   if (options_.validate_only) {
+    // `--validate` has to answer what applying would: the file is the documented
+    // source of truth, so a configuration this refuses is one the appliance would
+    // have refused at startup.
+    std::string validate_error;
+    if (!validate_configuration(config_, nullptr, &validate_error)) {
+      LOG_ERROR("configuration is not valid: ", validate_error);
+      return 1;
+    }
     LOG_INFO("configuration is valid");
     return 0;
   }

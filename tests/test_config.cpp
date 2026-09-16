@@ -139,6 +139,36 @@ TEST_CASE(config_endpoint_streams_round_trip) {
   CHECK(minimal.endpoints[0].aes67.auto_create_streams);
 }
 
+TEST_CASE(config_conference_block_round_trip) {
+  // Absent means disabled, so a configuration that does not mention the leg keeps
+  // the behaviour it had before the block existed.
+  const Config defaults = Config::from_json(json::object());
+  CHECK(!defaults.conference.enabled);
+  CHECK_EQ(defaults.conference.display_name, std::string("Conference"));
+  CHECK(defaults.conference.target.empty());
+
+  const Config config = Config::from_json(
+      json{{"conference", json{{"enabled", true},
+                               {"account", "pbx"},
+                               {"target", "sip:conf@pbx.example.com"},
+                               {"display_name", "FreePBX room"}}}});
+  CHECK(config.conference.enabled);
+  CHECK_EQ(config.conference.account, std::string("pbx"));
+  CHECK_EQ(config.conference.target, std::string("sip:conf@pbx.example.com"));
+  CHECK_EQ(config.conference.display_name, std::string("FreePBX room"));
+
+  const Config restored = Config::from_json(config.to_json());
+  CHECK(restored.conference.enabled);
+  CHECK_EQ(restored.conference.target, std::string("sip:conf@pbx.example.com"));
+  CHECK_EQ(restored.conference.display_name, std::string("FreePBX room"));
+
+  // A nameless leg is still named, the way a line's display name defaults.
+  const Config unnamed = Config::from_json(json{
+      {"conference",
+       json{{"enabled", true}, {"target", "sip:conf@pbx"}, {"display_name", ""}}}});
+  CHECK_EQ(unnamed.conference.display_name, std::string("Conference"));
+}
+
 TEST_CASE(util_db_conversions) {
   CHECK_NEAR(linear_to_dbfs(1.0), 0.0, 1e-9);
   CHECK_NEAR(linear_to_dbfs(0.5), -6.0206, 1e-3);

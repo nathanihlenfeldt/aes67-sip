@@ -272,15 +272,19 @@ class IntercomMatrix {
 };
 
 /**
- * True when the configuration could work: no duplicate endpoint or party-line
- * ids or names, no device channel claimed twice by the endpoints, every member
- * binding in range and resolvable, and the declared shapes inside the device the
- * configuration opens.
+ * True when the configuration could work: the conference leg is diallable and uses
+ * a declared account, no configured line takes the conference leg's reserved id,
+ * and (see `IntercomMatrix::plan_from_config`) no duplicate endpoint or party-line
+ * ids or names, no device channel claimed twice, every member binding in range and
+ * resolvable, and the declared shapes inside the device the configuration opens.
  *
- * This is the entry point for anything that edits or applies configuration, so
- * an editor can ask "would this be accepted?" without keeping a plan - see
- * `POST /api/config`, and `LineManager::apply_configuration` for the apply path.
+ * The matrix plan is resolved into `plan` when one is given, so an apply path can
+ * validate and resolve in one step; pass null to validate only (what an editor
+ * asking "would this be accepted?" wants).  Every caller that applies or edits
+ * configuration goes through this one function, which is what keeps a hand-edited
+ * file and a web edit refused the same way.
  */
-bool validate_configuration(const Config& config, std::string* error);
+bool validate_configuration(const Config& config, MatrixPlan* plan,
+                            std::string* error);
 
 }  // namespace aes67sip

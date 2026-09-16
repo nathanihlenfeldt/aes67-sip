@@ -150,6 +150,16 @@ void AudioRouter::add_line(int line_id, const LineParams& params,
   fresh->tx_primed = false;
   std::lock_guard<std::mutex> lock(mutex_);
   set_line_rate_locked(*fresh, fresh->pending_rate);
+  // The call gate belongs to the media callbacks, not to configuration: a line
+  // that is already in a call keeps it, because a configuration edit must not
+  // silence a live line - the call is still up, so nothing would raise the gate
+  // again.  (The engine protects a call from a configuration update for the same
+  // reason.)  On the first add there is nothing to preserve, so the caller's value
+  // stands.
+  const auto existing = lines_.find(line_id);
+  if (existing != lines_.end()) {
+    fresh->params.call_active = existing->second->params.call_active;
+  }
   lines_[line_id] = std::move(fresh);
 }
 
@@ -159,7 +169,11 @@ void AudioRouter::remove_line(int line_id) {
 }
 
 void AudioRouter::set_line_params(int line_id, const LineParams& params) {
-  with_line(line_id, [&](Line& line) { line.params = params; });
+  with_line(line_id, [&](Line& line) {
+    const bool call_active = line.params.call_active;
+    line.params = params;
+    line.params.call_active = call_active;  // the call, not the configuration
+  });
 }
 
 void AudioRouter::set_line_call_active(int line_id, bool active) {
@@ -272,12 +286,24 @@ void AudioRouter::process_block() {
         break;
       }
     }
+    // The conference leg has no device channels: its media is the matrix's
+    // conference sides, which exist only while it has a call.
+    const bool conference_up =
+        params.conference && params.enabled && params.call_active && !params.mute;
     if (line.downmix.size() != frames) {
       line.downmix.assign(frames, 0.0F);
     }
 
     // ---- AES67 capture -> PBX -------------------------------------------
-    if (mapped) {
+    if (params.conference) {
+      // What the conference hears: the sum of the members of the party lines that
+      // claim it, each at its contribution level, which the matrix builds.
+      if (conference_up && matrix_ != nullptr) {
+        matrix_->pull_conference_audio(line.downmix.data(), frames);
+      } else {
+        std::fill(line.downmix.begin(), line.downmix.end(), 0.0F);
+      }
+    } else if (mapped) {
       for (unsigned frame = 0; frame < frames; ++frame) {
         double sum = 0.0;
         const size_t base = static_cast<size_t>(frame) * channels;
@@ -304,8 +330,8 @@ void AudioRouter::process_block() {
       line.ptt = false;
     }
 
-    const bool send =
-        params.enabled && mapped && params.call_active && !params.mute;
+    const bool send = params.enabled && (mapped || params.conference) &&
+                      params.call_active && !params.mute;
     if (send) {
       const double tx_gain = db_to_linear(params.gain_db + params.tx_gain_db);
       if (tx_gain != 1.0) {
@@ -372,7 +398,15 @@ void AudioRouter::process_block() {
                                                     line.upsampled.data());
 
     double playback_peak = kSilenceDbfs;
-    if (line.tone_until > now && mapped) {
+    if (params.conference) {
+      // What the conference says goes into the matrix, which mixes it into the
+      // party lines that claim it.  No device channel is involved.
+      if (send && matrix_ != nullptr && upsampled > 0) {
+        const unsigned count = std::min(static_cast<unsigned>(upsampled), frames);
+        matrix_->push_conference_audio(line.upsampled.data(), count);
+        playback_peak = peak_dbfs(line.upsampled.data(), count);
+      }
+    } else if (line.tone_until > now && mapped) {
       // commissioning tone on the AES67 output of this line
       const double step =
           2.0 * M_PI * line.tone_hz / static_cast<double>(format_.sample_rate);

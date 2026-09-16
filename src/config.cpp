@@ -364,6 +364,20 @@ Config Config::from_json(const json& document) {
         d, "rtp_mcast_base", config.aes67_daemon.rtp_mcast_base);
   }
 
+  if (json_has(document, "conference")) {
+    const auto& c = document.at("conference");
+    config.conference.enabled =
+        json_get<bool>(c, "enabled", config.conference.enabled);
+    config.conference.account =
+        json_get<std::string>(c, "account", config.conference.account);
+    config.conference.target = json_get<std::string>(c, "target", "");
+    config.conference.display_name =
+        json_get<std::string>(c, "display_name", config.conference.display_name);
+    if (config.conference.display_name.empty()) {
+      config.conference.display_name = "Conference";
+    }
+  }
+
   if (json_has(document, "sip")) {
     const auto& s = document.at("sip");
     config.sip.enabled = json_get<bool>(s, "enabled", config.sip.enabled);
@@ -464,6 +478,11 @@ json Config::to_json() const {
                 {"srtp", this->sip.srtp},
                 {"debug_log_level", this->sip.debug_log_level}};
 
+  json conference_json{{"enabled", conference.enabled},
+                       {"account", conference.account},
+                       {"target", conference.target},
+                       {"display_name", conference.display_name}};
+
   json accounts_json = json::array();
   for (const auto& account : accounts) {
     accounts_json.push_back(account_to_json(account));
@@ -484,13 +503,19 @@ json Config::to_json() const {
     party_lines_json.push_back(party_line_to_json(line));
   }
 
-  return json{
-      {"log_severity", log_severity},     {"http_addr", http_addr},
-      {"http_port", http_port},           {"webui_dir", webui_dir},
-      {"webui_api_auth", webui_api_auth}, {"audio", audio_json},
-      {"aes67_daemon", daemon_json},      {"sip", sip_json},
-      {"accounts", accounts_json},        {"lines", lines_json},
-      {"endpoints", endpoints_json},      {"party_lines", party_lines_json}};
+  return json{{"log_severity", log_severity},
+              {"http_addr", http_addr},
+              {"http_port", http_port},
+              {"webui_dir", webui_dir},
+              {"webui_api_auth", webui_api_auth},
+              {"audio", audio_json},
+              {"aes67_daemon", daemon_json},
+              {"sip", sip_json},
+              {"conference", conference_json},
+              {"accounts", accounts_json},
+              {"lines", lines_json},
+              {"endpoints", endpoints_json},
+              {"party_lines", party_lines_json}};
 }
 
 // ---------------------------------------------------------------------------

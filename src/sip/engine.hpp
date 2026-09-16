@@ -148,6 +148,14 @@ class StubSipEngine : public SipEngine {
   bool simulate_incoming_call(int line_id, const std::string& remote_uri,
                               std::string* error);
 
+  /**
+   * Test hook: makes the current call on `line_id` fail with `reason`, the way a
+   * busy, refused or dropped call does, so the reporting of a call that cannot be
+   * established can be exercised without a PBX.
+   */
+  bool simulate_call_failure(int line_id, const std::string& reason,
+                             std::string* error);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

@@ -40,9 +40,22 @@ class AudioRouter {
     double tx_gain_db{0.0};                // AES67 -> PBX
     bool mute{false};
     bool enabled{true};
-    bool call_active{false};  // when false the line sends/plays silence
+    /**
+     * Whether the line's call is up.  Owned by the call, not by configuration:
+     * `set_line_call_active` is what raises and drops it (the SIP media
+     * callbacks), and adding or updating a line preserves it, so editing the
+     * configuration mid-call cannot silence a live line.
+     */
+    bool call_active{false};
     double ptt_threshold_dbfs{-45.0};
     int ptt_hold_ms{400};
+    /**
+     * The conference leg: this "line" carries no RAVENNA channels.  Its outgoing
+     * side is the mix the matrix builds for the conference and its incoming side
+     * goes back into the matrix's mixes, so both directions are the matrix's
+     * conference rings rather than the device - see `IntercomMatrix`.
+     */
+    bool conference{false};
   };
 
   struct LineMeters {

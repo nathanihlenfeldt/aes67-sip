@@ -116,9 +116,52 @@ bool refuse_claimed_twice(const MatrixPlan& plan, std::string* error) {
 
 }  // namespace
 
-bool validate_configuration(const Config& config, std::string* error) {
-  MatrixPlan plan;
-  return IntercomMatrix::plan_from_config(config, &plan, error);
+bool validate_configuration(const Config& config, MatrixPlan* plan,
+                            std::string* error) {
+  if (error != nullptr) {
+    error->clear();
+  }
+
+  // The conference leg is the matrix's off-site participant, so its own
+  // configuration is refused with the matrix's: a leg that is enabled but cannot
+  // be dialled, or that would register with an account nobody declares, is a
+  // configuration that could not work.
+  if (config.conference.enabled) {
+    if (trim(config.conference.target).empty()) {
+      if (error != nullptr) {
+        *error =
+            "the conference leg is enabled but has no target to dial "
+            "(conference.target) - set it, or disable the leg (conference.enabled)";
+      }
+      return false;
+    }
+    if (config.find_account(config.conference.account) == nullptr) {
+      if (error != nullptr) {
+        *error = "the conference leg uses account '" + config.conference.account +
+                 "', which no account declares";
+      }
+      return false;
+    }
+  }
+  // The reserved id is how the leg is kept apart from the lines that carry device
+  // channels, so a configured line may not take it.
+  for (const auto& line : config.lines) {
+    if (line.id == kConferenceLineId) {
+      if (error != nullptr) {
+        *error = "line " + std::to_string(line.id) +
+                 " uses the id reserved for the conference leg";
+      }
+      return false;
+    }
+  }
+
+  // The matrix's own rules, and the plan the caller asked for (if any).
+  MatrixPlan resolved;
+  if (!IntercomMatrix::plan_from_config(config, plan != nullptr ? plan : &resolved,
+                                        error)) {
+    return false;
+  }
+  return true;
 }
 
 bool IntercomMatrix::validate_plan(const MatrixPlan& plan, std::string* error) {

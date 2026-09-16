@@ -86,6 +86,31 @@ LineManager::~LineManager() {
   stop();
 }
 
+namespace {
+
+/**
+ * The conference leg as the SIP engine and the supervisor see it: a line that
+ * dials the conference and keeps the call up, with no AES67 side of its own.
+ */
+LineConfig conference_line_config(const ConferenceConfig& conference) {
+  LineConfig line;
+  line.id = kConferenceLineId;
+  line.name =
+      conference.display_name.empty() ? "Conference" : conference.display_name;
+  line.enabled = conference.enabled;
+  // No device channels and no daemon streams: its media is the matrix's
+  // conference sides (see AudioRouter::LineParams::conference).
+  line.aes67.channels.clear();
+  line.aes67.auto_create_streams = false;
+  line.sip.account = conference.account;
+  line.sip.display_name = line.name;
+  line.sip.call_mode = "dial_out";  // dialled and retried, like a dial_out line
+  line.sip.dial_target = conference.target;
+  return line;
+}
+
+}  // namespace
+
 int LineManager::line_count() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return static_cast<int>(lines_.size());
@@ -370,15 +395,83 @@ void LineManager::remove_daemon_streams(const LineConfig& line) {
   daemon_->delete_source(line.aes67.source_id, &error);
 }
 
+void LineManager::apply_conference() {
+  const ConferenceConfig& conference = config_->conference;
+  std::shared_ptr<LineRuntime> existing;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = lines_.find(kConferenceLineId);
+    if (it != lines_.end()) {
+      existing = it->second;
+    }
+  }
+
+  if (!conference.enabled) {
+    if (existing == nullptr) {
+      return;  // no leg was configured and none is configured now
+    }
+    std::string error;
+    if (engine_ != nullptr) {
+      engine_->hangup(kConferenceLineId, &error);
+      engine_->remove_line(kConferenceLineId);
+    }
+    router_->remove_line(kConferenceLineId);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      lines_.erase(kConferenceLineId);
+    }
+    LOG_INFO(
+        "conference: the leg is disabled - call, routing and registration removed");
+    return;
+  }
+
+  const LineConfig line = conference_line_config(conference);
+  if (existing == nullptr) {
+    auto runtime = std::make_shared<LineRuntime>();
+    runtime->is_conference = true;
+    runtime->config = line;
+    runtime->state = LineState::kIdle;
+    std::lock_guard<std::mutex> lock(mutex_);
+    lines_[kConferenceLineId] = std::move(runtime);
+  } else {
+    std::lock_guard<std::mutex> lock(mutex_);
+    existing->config = line;
+    if (existing->state == LineState::kDisabled) {
+      existing->state = LineState::kIdle;
+    }
+  }
+
+  if (engine_ != nullptr) {
+    std::string engine_error;
+    if (!engine_->add_line(line, &engine_error)) {
+      LOG_WARN("conference: cannot register the leg with the SIP engine: ",
+               engine_error);
+    }
+  }
+
+  // Registered with the router like a line, but with no channels: both directions
+  // are the matrix's conference sides.  The supervisor raises and keeps the call,
+  // exactly as it does for a `dial_out` line.
+  AudioRouter::LineParams params;
+  params.conference = true;
+  params.channels.clear();
+  params.enabled = true;
+  params.call_active = false;                // raised by the call, not by config
+  params.ptt_threshold_dbfs = kSilenceDbfs;  // never push-to-talk: not an endpoint
+  router_->add_line(kConferenceLineId, params, 8000);
+  LOG_INFO("conference: leg on account '", conference.account, "' dialling '",
+           conference.target, "'");
+}
+
 bool LineManager::apply_configuration(std::string* error) {
   // The whole configuration is validated *before* anything is touched, so a
   // configuration that could not work is refused as a whole (see
-  // `IntercomMatrix::plan_from_config`) rather than applied down to the parts that
-  // happen to fit: no lines registered and no streams provisioned from a
-  // configuration that is going to be rejected.
+  // `validate_configuration`) rather than applied down to the parts that happen to
+  // fit: no lines registered and no streams provisioned from a configuration that
+  // is going to be rejected.  The plan comes out of the same call, so the matrix
+  // is resolved once.
   MatrixPlan plan;
-  if (matrix_ != nullptr &&
-      !IntercomMatrix::plan_from_config(*config_, &plan, error)) {
+  if (!validate_configuration(*config_, &plan, error)) {
     return false;
   }
 
@@ -387,7 +480,9 @@ bool LineManager::apply_configuration(std::string* error) {
     std::lock_guard<std::mutex> lock(mutex_);
     // pick up lines added or removed while the gateway was running
     for (auto it = lines_.begin(); it != lines_.end();) {
-      if (config_->line_index(it->first) < 0) {
+      // The conference leg is not a configured line: it is created and removed by
+      // apply_conference() from the conference block.
+      if (it->first != kConferenceLineId && config_->line_index(it->first) < 0) {
         it = lines_.erase(it);
       } else {
         ++it;
@@ -452,6 +547,10 @@ bool LineManager::apply_configuration(std::string* error) {
     // the matrix those channels are nobody's routing, so nothing is provisioned.
     configure_endpoint_streams();
   }
+  // The conference leg is applied whatever the matrix is doing: switching it off
+  // has to remove a leg that is already up, and with no matrix attached the router
+  // simply has no conference sides to carry (it checks).
+  apply_conference();
 
   LOG_INFO("configuration applied: ", lines.size(), " line(s), ",
            config_->endpoints.size(), " endpoint(s), SIP engine ",
@@ -778,7 +877,11 @@ json LineManager::lines_status() const {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (const auto& entry : lines_) {
-      ids.push_back(entry.first);
+      // The conference leg has its own view (`status.conference`): it carries no
+      // device channels, so it is not one of the lines this list is about.
+      if (!entry.second->is_conference) {
+        ids.push_back(entry.first);
+      }
     }
   }
   json result = json::array();
@@ -789,6 +892,44 @@ json LineManager::lines_status() const {
     }
   }
   return result;
+}
+
+json LineManager::conference_status() const {
+  const ConferenceConfig& conference = config_->conference;
+  const std::string name =
+      conference.display_name.empty() ? "Conference" : conference.display_name;
+  LineState state = conference.enabled ? LineState::kIdle : LineState::kDisabled;
+  int state_code = 0;
+  std::string detail;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = lines_.find(kConferenceLineId);
+    if (it != lines_.end()) {
+      state = it->second->state;
+      state_code = it->second->state_code;
+      detail = it->second->detail;
+    }
+  }
+
+  // The leg's directions are named for the conference, not for an endpoint: the
+  // router's "capture" side of it is the mix the matrix builds *for* the
+  // conference, and its "playback" side is what arrived from the PBX and went into
+  // the mixes.
+  AudioRouter::LineMeters levels;
+  if (router_ != nullptr && conference.enabled) {
+    levels = router_->meters(kConferenceLineId);
+  }
+
+  return json{{"enabled", conference.enabled},
+              {"name", name},
+              {"account", conference.account},
+              {"target", conference.target},
+              {"state", to_string(state)},
+              {"state_code", state_code},
+              {"detail", detail},
+              {"levels",
+               json{{"to_conference_dbfs", dbfs_to_json(levels.capture_dbfs)},
+                    {"from_conference_dbfs", dbfs_to_json(levels.to_aes67_dbfs)}}}};
 }
 
 bool LineManager::line_config(int line_id, json* config, std::string* error) const {
@@ -1044,7 +1185,11 @@ json LineManager::self_test() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (const auto& entry : lines_) {
-      ids.push_back(entry.first);
+      // The conference leg is judged separately below: it has no endpoint, no
+      // sink and no device channels to be silent.
+      if (!entry.second->is_conference) {
+        ids.push_back(entry.first);
+      }
     }
   }
   for (const int id : ids) {
@@ -1110,7 +1255,21 @@ json LineManager::self_test() {
         detail.str());
   }
 
+  // ---- conference leg ----------------------------------------------------
+  // Reported only when one is configured, and reported honestly: an idle or
+  // dialling leg is not a failure, an error is, and neither claims health the
+  // state does not support.
+  if (config_->conference.enabled) {
+    const json conference = conference_status();
+    const std::string state = json_get<std::string>(conference, "state", "unknown");
+    const std::string detail = json_get<std::string>(conference, "detail", "");
+    std::string summary = "conference leg " + state;
+    if (!detail.empty()) {
+      summary += ": " + detail;
+    }
+    add("conference leg", state != "error", summary);
+  }
+
   return json{{"ok", all_ok}, {"checks", checks}};
 }
-
 }  // namespace aes67sip

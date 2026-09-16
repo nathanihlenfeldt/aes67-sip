@@ -112,6 +112,26 @@ Single poll endpoint used by the UI.
 `state` is one of `disabled`, `idle`, `dialing`, `ringing`, `in_call`, `error`.
 Levels are dBFS floats; silence is serialised as `null`.
 
+`conference` is the off-site conference leg — one call whose media is the matrix's
+conference sides rather than a line's channels. `state` is the same vocabulary as a line
+(`disabled` / `idle` / `dialing` / `ringing` / `in_call` / `error`), so an operator can
+tell "nobody is on the off-site call" (`idle`, `dialing`) from "the link is broken"
+(`error`, with `detail` and `state_code` carrying the reason the PBX gave). `enabled` is
+false when no leg is configured, which is also how a site that never uses one reports
+itself. The levels are named for the conference, not for an endpoint: `to_conference_dbfs`
+is the mix the matrix builds for it (what it hears) and `from_conference_dbfs` is what it
+sent into the site's mixes. The party lines that claim it are the `party_lines[]` entries
+with `claims_conference`.
+
+```json
+"conference": {
+  "enabled": true, "name": "Conference", "account": "pbx",
+  "target": "sip:conf@pbx.example.com",
+  "state": "in_call", "state_code": 200, "detail": "answered",
+  "levels": { "to_conference_dbfs": -18.0, "from_conference_dbfs": -21.5 }
+}
+```
+
 `party_lines[]` reports the intercom matrix: each party line with its members, and
 for each member the endpoint that owns it, the endpoint's own channel indices it
 bound (`talk_channel` / `listen_channel`, each `-1` where that direction is

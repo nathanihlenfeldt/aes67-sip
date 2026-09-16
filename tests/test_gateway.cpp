@@ -118,6 +118,12 @@ struct Gateway {
     return lines->apply_configuration(restart_error);
   }
 
+  /**
+   * The stub engine, for its documented test hooks.  Null when the test built a
+   * real engine (the suite always runs the stub).
+   */
+  StubSipEngine* stub() { return dynamic_cast<StubSipEngine*>(engine.get()); }
+
   void stop() {
     if (api != nullptr) {
       api->stop();
@@ -812,6 +818,449 @@ TEST_CASE(rest_api_refuses_an_edit_it_cannot_persist) {
   // instead of a saved state the next restart would lose.
   CHECK_EQ(get_json(client, "/api/config").at("party_lines").size(), 1U);
   CHECK_EQ(get_json(client, "/api/status").at("party_lines").size(), 1U);
+
+  gateway.stop();
+}
+
+// ---------------------------------------------------------------------------
+// the conference leg: a SIP call whose media is the matrix's conference sides
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/**
+ * Two party lines of two endpoints each, one of which claims the conference, plus
+ * the conference leg itself.  The four endpoints sit on four device channels, so
+ * the second line's channels are free of the first's.
+ */
+Config conference_config(bool cameras_claims, double tone_hz = 1000.0) {
+  Config config = test_config();
+  config.audio.null_tone_hz = tone_hz;
+  config.audio.channels = 4;
+
+  const struct {
+    const char* id;
+    const char* name;
+    unsigned talk;
+    unsigned listen;
+  } packs[] = {
+      {"pack-1", "Camera 1", 0, 1},
+      {"pack-2", "Camera 2", 1, 0},
+      {"pack-3", "Camera 3", 2, 3},
+      {"pack-4", "Camera 4", 3, 2},
+  };
+  for (const auto& pack : packs) {
+    EndpointConfig endpoint;
+    endpoint.id = pack.id;
+    endpoint.name = pack.name;
+    endpoint.talk_channels = {pack.talk};
+    endpoint.listen_channels = {pack.listen};
+    config.endpoints.push_back(endpoint);
+  }
+
+  const auto make_line = [](const std::string& id, const std::string& name,
+                            bool claims, const std::string& first,
+                            const std::string& second) {
+    PartyLineConfig line;
+    line.id = id;
+    line.name = name;
+    line.claims_conference = claims;
+    for (const std::string& endpoint : {first, second}) {
+      PartyLineMemberConfig member;
+      member.endpoint = endpoint;
+      member.talk_channel = 0;
+      member.listen_channel = 0;
+      line.members.push_back(member);
+    }
+    return line;
+  };
+  config.party_lines = {
+      make_line("cameras", "Cameras", cameras_claims, "pack-1", "pack-2"),
+      make_line("stage", "Stage", false, "pack-3", "pack-4")};
+
+  config.conference.enabled = true;
+  config.conference.account = "pbx";
+  config.conference.target = "sip:conf@pbx.example.com";
+  config.conference.display_name = "Conference";
+  return config;
+}
+
+/** A playback channel's held level, with digital silence read as the floor. */
+double playback_level(const json& status, size_t channel) {
+  const json& levels = status.at("audio").at("playback_dbfs");
+  if (channel >= levels.size() || levels[channel].is_null()) {
+    return kSilenceDbfs;
+  }
+  return levels[channel].get<double>();
+}
+
+/** True when a reported dBFS value means digital silence, however it is serialised.
+ */
+bool is_silent(const json& value) {
+  return value.is_null() || value.get<double>() <= -60.0;
+}
+
+/** True while the conference leg reports itself in a call. */
+bool conference_in_call(const json& status) {
+  return json_get_path<std::string>(status, {"conference", "state"}, "") ==
+         "in_call";
+}
+
+/** True while the conference leg reports the given state. */
+bool conference_reports(const json& status, const std::string& state) {
+  return json_get_path<std::string>(status, {"conference", "state"}, "") == state;
+}
+
+}  // namespace
+
+TEST_CASE(conference_leg_carries_only_the_lines_that_claim_it) {
+  // The simulated device carries no tone, so what a listen channel shows is what
+  // the matrix put there - here, the conference's own audio.
+  Gateway gateway(true,
+                  [](Config& config) { config = conference_config(true, 0.0); });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  // The stub dials, rings and answers on its own, so the leg comes up.
+  CHECK(gateway.wait_for(conference_in_call, 8000));
+  const json conference = get_json(client, "/api/status").at("conference");
+  CHECK(conference.at("enabled").get<bool>());
+  CHECK_EQ(conference.at("target").get<std::string>(),
+           std::string("sip:conf@pbx.example.com"));
+
+  // Nothing is heard on either line before the conference says anything.
+  const json before = get_json(client, "/api/status");
+  CHECK(is_silent(before.at("audio").at("playback_dbfs")[1]));
+  CHECK(is_silent(before.at("audio").at("playback_dbfs")[3]));
+
+  // What the conference says arrives on the SIP leg: the mix-minus mixes of the
+  // lines that claim it must carry it, and no other channel must.
+  std::vector<float> from_conference(800, 0.25F);
+  gateway.lines->push_from_sip(kConferenceLineId, from_conference.data(),
+                               from_conference.size());
+  CHECK(gateway.wait_for(
+      [](const json& status) { return playback_level(status, 1) > -30.0; }, 4000));
+
+  const json status = get_json(client, "/api/status");
+  CHECK(playback_level(status, 1) > -30.0);  // Camera 1 (claims) hears it
+  CHECK(playback_level(status, 0) > -30.0);  // so does Camera 2
+  CHECK(is_silent(status.at("audio").at("playback_dbfs")[3]));  // Stage: untouched
+  CHECK(is_silent(status.at("audio").at("playback_dbfs")[2]));
+
+  gateway.stop();
+}
+
+TEST_CASE(conference_leg_sends_the_claiming_lines_mix) {
+  // The device carries a tone on every capture channel, so every member is
+  // talking: the conference hears the sum of the claiming line's members.
+  Gateway gateway(true, [](Config& config) { config = conference_config(true); });
+  CHECK(gateway.start());
+  CHECK(gateway.wait_for(conference_in_call, 8000));
+
+  // Pull from the leg the way its media thread does, until the mix comes through
+  // its resampler.
+  bool heard = false;
+  for (int attempt = 0; attempt < 60 && !heard; ++attempt) {
+    std::vector<float> mix(160, 0.0F);
+    gateway.lines->pull_to_sip(kConferenceLineId, mix.data(), mix.size());
+    for (const float sample : mix) {
+      if (std::fabs(sample) > 1e-4F) {
+        heard = true;
+        break;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  CHECK(heard);
+  gateway.stop();
+
+  // A site whose lines do not claim the conference sends it nothing at all.
+  Gateway quiet(true, [](Config& config) { config = conference_config(false); });
+  CHECK(quiet.start());
+  CHECK(quiet.wait_for(conference_in_call, 8000));
+  bool leaked = false;
+  for (int attempt = 0; attempt < 60 && !leaked; ++attempt) {
+    std::vector<float> mix(160, 0.0F);
+    quiet.lines->pull_to_sip(kConferenceLineId, mix.data(), mix.size());
+    for (const float sample : mix) {
+      if (std::fabs(sample) > 1e-4F) {
+        leaked = true;
+        break;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  CHECK(!leaked);
+  quiet.stop();
+}
+
+TEST_CASE(conference_leg_that_cannot_be_established_is_reported) {
+  Gateway gateway(true, [](Config& config) { config = conference_config(true); });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+  CHECK(gateway.wait_for(conference_in_call, 8000));
+
+  // The PBX refuses the call (busy): the leg reports it, with the reason...
+  CHECK(gateway.stub() != nullptr);
+  CHECK(gateway.stub()->simulate_call_failure(kConferenceLineId, "486 busy here",
+                                              &gateway.error));
+  CHECK(gateway.wait_for(
+      [](const json& status) { return conference_reports(status, "error"); },
+      3000));
+  const json conference = get_json(client, "/api/status").at("conference");
+  CHECK_EQ(conference.at("state_code").get<int>(), 486);
+  CHECK(conference.at("detail").get<std::string>().find("486 busy here") !=
+        std::string::npos);
+
+  // ...and the site's own talk paths keep working without it: every member of
+  // every line is still arriving, and the matrix is still mixing.
+  const json party_lines = get_json(client, "/api/status").at("party_lines");
+  CHECK_EQ(party_lines.size(), 2U);
+  unsigned members = 0;
+  bool every_member_arriving = true;
+  for (const auto& line : party_lines) {
+    for (const auto& member : line.at("members")) {
+      ++members;
+      every_member_arriving =
+          every_member_arriving && member.at("arriving").get<bool>();
+    }
+  }
+  CHECK_EQ(members, 4U);
+  CHECK(every_member_arriving);
+
+  // The self-test reports the leg as a failure with the same reason, rather than
+  // claiming health or hiding it.
+  const auto response =
+      client.Post("/api/system/self-test", "", "application/json");
+  CHECK(response && response->status == 200);
+  const json self_test = json::parse(response->body);
+  bool saw_conference = false;
+  for (const auto& check : self_test.at("checks")) {
+    if (check.at("name") != "conference leg") {
+      continue;
+    }
+    saw_conference = true;
+    CHECK(!check.at("ok").get<bool>());
+    CHECK(check.at("detail").get<std::string>().find("486 busy here") !=
+          std::string::npos);
+  }
+  CHECK(saw_conference);
+  gateway.stop();
+}
+
+TEST_CASE(rest_api_reports_a_conference_leg_that_is_not_configured) {
+  // The default fixture has no conference block: the status says so, the leg is
+  // not a line, and the self-test does not judge it.
+  Gateway gateway;
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  const json status = get_json(client, "/api/status");
+  const json& conference = status.at("conference");
+  CHECK(!conference.at("enabled").get<bool>());
+  CHECK_EQ(conference.at("state").get<std::string>(), std::string("disabled"));
+  CHECK(is_silent(conference.at("levels").at("to_conference_dbfs")));
+  CHECK(is_silent(conference.at("levels").at("from_conference_dbfs")));
+
+  // It is not one of the lines: `lines[]` is unchanged, and the line count the
+  // rest of the appliance uses does not include it.
+  CHECK_EQ(status.at("lines").size(), 1U);
+  CHECK_EQ(gateway.lines->line_count(), 1);
+
+  const auto response =
+      client.Post("/api/system/self-test", "", "application/json");
+  CHECK(response && response->status == 200);
+  const json self_test = json::parse(response->body);
+  for (const auto& check : self_test.at("checks")) {
+    CHECK(check.at("name") != "conference leg");
+  }
+
+  gateway.stop();
+}
+
+TEST_CASE(rest_api_refuses_a_conference_leg_that_could_not_be_dialled) {
+  Gateway gateway(true, [](Config& config) { config = party_line_config(); });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  // Enabled with nowhere to dial is refused where the configuration is edited,
+  // and nothing of it is applied.
+  const auto refused = client.Post(
+      "/api/config",
+      json{{"conference", json{{"enabled", true}, {"target", ""}}}}.dump(),
+      "application/json");
+  CHECK(refused && refused->status == 400);
+  CHECK(refused->body.find("conference leg is enabled but has no target") !=
+        std::string::npos);
+  CHECK(
+      !get_json(client, "/api/status").at("conference").at("enabled").get<bool>());
+
+  // A target with an account nobody declares is refused too: the leg would
+  // register nowhere.
+  const auto unknown_account =
+      client.Post("/api/config",
+                  json{{"conference", json{{"enabled", true},
+                                           {"target", "sip:conf@pbx.example.com"},
+                                           {"account", "ghost"}}}}
+                      .dump(),
+                  "application/json");
+  CHECK(unknown_account && unknown_account->status == 400);
+  CHECK(unknown_account->body.find("account 'ghost'") != std::string::npos);
+
+  gateway.stop();
+}
+
+TEST_CASE(conference_leg_survives_a_configuration_edit) {
+  // An operator nudging a level or a binding while the site is on air must not
+  // take the off-site call's audio away: the call gate belongs to the call.
+  Gateway gateway(true, [](Config& config) { config = conference_config(true); });
+  gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
+    return gateway.restart_from_file(restart_error);
+  });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+  CHECK(gateway.wait_for(conference_in_call, 8000));
+
+  const auto mix_is_heard = [&gateway]() {
+    for (int attempt = 0; attempt < 25; ++attempt) {
+      std::vector<float> mix(160, 0.0F);
+      gateway.lines->pull_to_sip(kConferenceLineId, mix.data(), mix.size());
+      for (const float sample : mix) {
+        if (std::fabs(sample) > 1e-4F) {
+          return true;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+  };
+  CHECK(mix_is_heard());
+
+  // The edit the commissioning page would make: a member's contribution level.
+  const json before = get_json(client, "/api/config");
+  json lines = before.at("party_lines");
+  lines[0]["members"][0]["contribution_db"] = -6.0;
+  const auto edited = client.Post(
+      "/api/config",
+      json{{"endpoints", before.at("endpoints")}, {"party_lines", lines}}.dump(),
+      "application/json");
+  CHECK(edited && edited->status == 200);
+  CHECK(gateway.wait_for(conference_in_call, 4000));
+
+  // The leg is still carrying audio in both directions, and still only to the
+  // lines that claim it.
+  CHECK(mix_is_heard());
+  std::vector<float> from_conference(800, 0.25F);
+  gateway.lines->push_from_sip(kConferenceLineId, from_conference.data(),
+                               from_conference.size());
+  CHECK(gateway.wait_for(
+      [](const json& status) { return playback_level(status, 1) > -30.0; }, 4000));
+
+  gateway.stop();
+}
+
+TEST_CASE(conference_leg_can_be_switched_off) {
+  Gateway gateway(true, [](Config& config) { config = conference_config(true); });
+  gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
+    return gateway.restart_from_file(restart_error);
+  });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+  CHECK(gateway.wait_for(conference_in_call, 8000));
+
+  // Switching the leg off takes the call, the routing and the registration with
+  // it, and says so.
+  const auto disabled = client.Post(
+      "/api/config", json{{"conference", json{{"enabled", false}}}}.dump(),
+      "application/json");
+  CHECK(disabled && disabled->status == 200);
+  CHECK(gateway.wait_for(
+      [](const json& status) { return conference_reports(status, "disabled"); },
+      4000));
+  const json status = get_json(client, "/api/status");
+  CHECK(!status.at("conference").at("enabled").get<bool>());
+  CHECK(is_silent(status.at("conference").at("levels").at("to_conference_dbfs")));
+  CHECK_EQ(status.at("lines").size(), 1U);  // the lines the site runs are untouched
+  CHECK_EQ(status.at("party_lines").size(), 2U);
+
+  // ...and switching it back on brings it up again, so the removal was clean.
+  const auto enabled =
+      client.Post("/api/config",
+                  json{{"conference", json{{"enabled", true},
+                                           {"account", "pbx"},
+                                           {"target", "sip:conf@pbx.example.com"}}}}
+                      .dump(),
+                  "application/json");
+  CHECK(enabled && enabled->status == 200);
+  CHECK(gateway.wait_for(conference_in_call, 8000));
+
+  gateway.stop();
+}
+
+TEST_CASE(conference_leg_isolation_holds_in_both_directions) {
+  // One site, two lines: "cameras" claims the conference, "stage" does not.  With
+  // the tone on, every member of both lines is talking, so the two directions can
+  // be told apart by muting one line's members at a time:
+  //
+  //   - stage's members audible, cameras' muted: the stage line mixes them for
+  //     each other, and the conference hears nothing at all;
+  //   - cameras' members audible too: now the conference hears them.
+  //
+  // A leg that read a device channel, or that mixed a non-claiming line in, fails
+  // the first half.
+  Gateway gateway(true, [](Config& config) {
+    config = conference_config(true);
+    for (auto& member : config.party_lines[0].members) {
+      member.mute = true;  // cameras: audible only in the second half
+    }
+  });
+  gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
+    return gateway.restart_from_file(restart_error);
+  });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+  CHECK(gateway.wait_for(conference_in_call, 8000));
+
+  const auto conference_hears = [&gateway]() {
+    for (int attempt = 0; attempt < 25; ++attempt) {
+      std::vector<float> mix(160, 0.0F);
+      gateway.lines->pull_to_sip(kConferenceLineId, mix.data(), mix.size());
+      for (const float sample : mix) {
+        if (std::fabs(sample) > 1e-4F) {
+          return true;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+  };
+
+  // The stage line's members are working - they hear each other on their own
+  // channels - while the conference hears none of it.
+  CHECK(gateway.wait_for(
+      [](const json& status) { return playback_level(status, 3) > -30.0; }, 4000));
+  CHECK(!conference_hears());
+
+  // Unmute the claiming line's members: their audio, and only theirs, now reaches
+  // the conference.
+  const json before = get_json(client, "/api/config");
+  json lines = before.at("party_lines");
+  for (auto& member : lines[0]["members"]) {
+    member["mute"] = false;
+  }
+  const auto unmuted = client.Post(
+      "/api/config",
+      json{{"endpoints", before.at("endpoints")}, {"party_lines", lines}}.dump(),
+      "application/json");
+  CHECK(unmuted && unmuted->status == 200);
+  CHECK(conference_hears());
 
   gateway.stop();
 }

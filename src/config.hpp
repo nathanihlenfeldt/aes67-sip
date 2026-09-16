@@ -172,6 +172,31 @@ struct EndpointAes67Config {
 };
 
 /**
+ * Reserved line id of the conference leg.
+ *
+ * The leg is a line to the SIP engine - the same state machine, retries and media
+ * handoff as any other - but not to the device: its media is the matrix's
+ * conference sides rather than RAVENNA channels.  It therefore carries an id no
+ * configured line may use (see `validate_configuration`).
+ */
+constexpr int kConferenceLineId = -1;
+
+/**
+ * The off-site conference: one call whose media is the matrix's conference sides,
+ * independent of the per-line legs.
+ *
+ * `target` is who the gateway dials; the leg is kept up and retried like a
+ * `dial_out` line.  Disabled by default, so a site that does not use it behaves
+ * exactly as before.
+ */
+struct ConferenceConfig {
+  bool enabled{false};
+  std::string account{"pbx"};
+  std::string target;  // e.g. sip:conference@pbx.example.com
+  std::string display_name{"Conference"};
+};
+
+/**
  * An endpoint on the site, and the shape it presents to the matrix.
  *
  * Nothing here names a device model: an endpoint says how many talk channels it
@@ -232,6 +257,9 @@ struct Config {
   SipConfig sip;
   std::vector<SipAccountConfig> accounts;
   std::vector<LineConfig> lines;
+  /** The off-site conference: one call whose media is the matrix's conference
+   * sides. */
+  ConferenceConfig conference;
   /** The intercom matrix: the site's endpoints and the party lines they share. */
   std::vector<EndpointConfig> endpoints;
   std::vector<PartyLineConfig> party_lines;

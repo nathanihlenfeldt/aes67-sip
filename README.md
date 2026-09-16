@@ -103,7 +103,9 @@ intercom use case:
                  "stream_name": "Intercom 1", "auto_create_streams": true },
       "sip":  { "account": "pbx", "extension": "2001", "call_mode": "permanent",
                 "dial_target": "sip:1001@pbx.example.com" } }
-  ]
+  ],
+  "conference": { "enabled": true, "account": "pbx",
+                  "target": "sip:conf@pbx.example.com", "display_name": "Conference" }
 }
 ```
 
@@ -113,6 +115,12 @@ intercom use case:
     and also held up.
   - `auto_answer` - answer inbound calls only. `dial_out` - dial out only.
   - `manual` - operator dials from the UI. `ptt` - legacy energy-triggered mode.
+- `conference` is the **off-site leg**: one call, independent of the per-line legs, whose
+  media is the matrix's conference sides rather than a line's channels. What the
+  conference says is mixed into every party line that claims it (`party_lines[].claims_conference`)
+  and what it hears is those lines' members summed at their contribution levels. Disabled
+  by default; `target` must be set when it is enabled, and `GET /api/status` reports the
+  leg's call state and levels under `conference`.
 - One AES67 **channel per line** (`aes67.channels: [n]`) and one call per channel.
 - `aes67.codec` is the RTP payload our **source** advertises: **`L24` by default**
   (Dante and most AES67 devices), or `L16`/`L2432`/`AM824`/`L32`. The sink's payload
@@ -138,7 +146,8 @@ intercom use case:
    With no grandmaster on the VLAN, run one from the appliance:
    `sudo ptp4l -i eth0 -m -l7 -E -S`
 3. Open `http://<appliance>:8081`:
-   - **Dashboard** - PTP, daemon reachability, SIP registrations, per-line state/levels
+   - **Dashboard** - PTP, daemon reachability, SIP registrations, per-line state/levels,
+     and the conference leg when one is configured
    - **Lines** - channel mapping, gain/mute, call controls, DTMF, test tone
    - **Party lines** - the commissioning view and editor: each line with its members,
      their contribution levels and live levels, and membership, levels and per-channel
