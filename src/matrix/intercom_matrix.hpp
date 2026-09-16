@@ -109,14 +109,38 @@ class IntercomMatrix {
   /**
    * Resolves a configuration into a plan, without touching the running routing.
    *
-   * Refuses the configuration - false, with the declared and the available
-   * totals in `error` - when the declared endpoint shapes need a wider device
-   * than `audio.channels` opens, rather than routing the channels that happen to
-   * fit.  A channel outside the opened device is a member that silently never
-   * arrives, which is the failure this is here to prevent.
+   * This is also the whole-configuration refusal for the intercom side: a
+   * configuration that could not work is refused as a whole, with a reason a
+   * commissioning engineer can act on, rather than partly applied.  It refuses,
+   * in this order:
+   *
+   *  - two endpoints sharing an id, or two party lines sharing an id or a name
+   *    (a binding names an endpoint by id, and the status view keys lines by id
+   *    and shows their names, so both have to be unambiguous);
+   *  - a member binding that does not resolve, or a channel outside the shape its
+   *    endpoint declared (see `validate_plan`);
+   *  - two endpoints claiming one device channel in the same direction, naming
+   *    the channel and both claimants;
+   *  - declared endpoint shapes wider than `audio.channels` opens, with the
+   *    declared and the available totals.
+   *
+   * Nothing is applied from a configuration that fails any of them.
    */
   static bool plan_from_config(const Config& config, MatrixPlan* plan,
                                std::string* error);
+
+  /**
+   * Refuses a plan whose bindings do not resolve: a member naming an endpoint
+   * that does not exist, or a talk/listen channel outside the shape that endpoint
+   * declared.  `configure()` checks the plan it is handed with this too, so a
+   * plan built in code cannot index past a declared shape.
+   *
+   * The two device-level rules - one claimant per channel, and the declared
+   * shapes fitting the device - are configuration-level and live in
+   * `plan_from_config`: `configure()` never opens the device, it only routes the
+   * channels a validated configuration gave it.
+   */
+  static bool validate_plan(const MatrixPlan& plan, std::string* error);
 
   /** The device channels a plan's declared shapes claim. */
   static MatrixChannelUse channel_use(const MatrixPlan& plan);
@@ -246,5 +270,17 @@ class IntercomMatrix {
   std::vector<float> conference_incoming_block_;
   std::vector<float> conference_outgoing_block_;
 };
+
+/**
+ * True when the configuration could work: no duplicate endpoint or party-line
+ * ids or names, no device channel claimed twice by the endpoints, every member
+ * binding in range and resolvable, and the declared shapes inside the device the
+ * configuration opens.
+ *
+ * This is the entry point for anything that edits or applies configuration, so
+ * an editor can ask "would this be accepted?" without keeping a plan - see
+ * `POST /api/config`, and `LineManager::apply_configuration` for the apply path.
+ */
+bool validate_configuration(const Config& config, std::string* error);
 
 }  // namespace aes67sip

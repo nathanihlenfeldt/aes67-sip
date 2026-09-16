@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <set>
 #include <sstream>
 
 #include "log.hpp"
@@ -19,7 +21,152 @@ namespace {
 /** A member counts as arriving while its held peak is above this. */
 constexpr double kArrivalThresholdDbfs = -60.0;
 
+/**
+ * How a claimant of a device channel is described in a refusal.  The index is
+ * quoted as the configuration writes it (`talk_channels[0]`), so it cannot be
+ * misread as the device channel named in the same sentence.
+ */
+std::string describe_claimant(const MatrixEndpointPlan& endpoint, bool talk_channel,
+                              size_t index) {
+  return "endpoint '" + endpoint.id + "' (" + endpoint.name + ") " +
+         (talk_channel ? "talk_channels" : "listen_channels") + "[" +
+         std::to_string(index) + "]";
+}
+
+/** "party line 'pl1' member 2" - where the binding a refusal is about sits. */
+std::string describe_binding(const MatrixLinePlan& line, size_t index) {
+  return "party line '" + line.id + "' member " + std::to_string(index + 1);
+}
+
+/**
+ * Refuses two `subject` sharing an id.  Ids are the keys everything else uses -
+ * member bindings name endpoints by id, the status view keys lines by id - so a
+ * duplicate makes a configuration ambiguous rather than merely untidy.
+ */
+bool refuse_duplicate_ids(const std::vector<std::string>& ids,
+                          const std::string& subject, std::string* error) {
+  std::set<std::string> seen;
+  for (const auto& id : ids) {
+    if (!seen.insert(id).second) {
+      if (error != nullptr) {
+        *error = "two " + subject + " share the id '" + id +
+                 "' - bindings and the status view name them by id, so it has to "
+                 "be unique";
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Refuses two party lines that are told apart only by case or spacing: their
+ * names are labels a human reads in the commissioning view and matches in a
+ * vendor's routing grid, so "PL 1" and "pl 1" are one line, not two.
+ */
+bool refuse_duplicate_names(const MatrixPlan& plan, std::string* error) {
+  std::set<std::string> names;
+  for (const auto& line : plan.lines) {
+    if (!names.insert(to_lower(trim(line.name))).second) {
+      if (error != nullptr) {
+        *error = "two party lines are called '" + line.name +
+                 "' - line names are how a person tells them apart, so they have "
+                 "to differ";
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Refuses a device channel two endpoints claim in the same direction.  Capture
+ * and playback are separate directions on the device, so a channel may well be
+ * one endpoint's talk channel and another's listen channel - that is how the
+ * reference site packs sixteen beltpacks into 32 channels - but within one
+ * direction a channel has exactly one claimant.
+ */
+bool refuse_claimed_twice(const MatrixPlan& plan, std::string* error) {
+  for (const bool talk_channel : {true, false}) {
+    std::map<unsigned, std::string> claimants;
+    for (const auto& endpoint : plan.endpoints) {
+      const std::vector<unsigned>& channels =
+          talk_channel ? endpoint.talk_channels : endpoint.listen_channels;
+      for (size_t index = 0; index < channels.size(); ++index) {
+        const auto it = claimants.find(channels[index]);
+        const std::string who = describe_claimant(endpoint, talk_channel, index);
+        if (it != claimants.end()) {
+          if (error != nullptr) {
+            *error = "device channel " + std::to_string(channels[index]) +
+                     " is claimed twice: " + it->second + " and " + who;
+          }
+          return false;
+        }
+        claimants[channels[index]] = who;
+      }
+    }
+  }
+  return true;
+}
+
 }  // namespace
+
+bool validate_configuration(const Config& config, std::string* error) {
+  MatrixPlan plan;
+  return IntercomMatrix::plan_from_config(config, &plan, error);
+}
+
+bool IntercomMatrix::validate_plan(const MatrixPlan& plan, std::string* error) {
+  if (error != nullptr) {
+    error->clear();
+  }
+  for (const auto& line : plan.lines) {
+    for (size_t index = 0; index < line.members.size(); ++index) {
+      const MatrixMemberPlan& member = line.members[index];
+      const MatrixEndpointPlan* endpoint = nullptr;
+      for (const auto& candidate : plan.endpoints) {
+        if (candidate.id == member.endpoint_id) {
+          endpoint = &candidate;
+          break;
+        }
+      }
+      if (endpoint == nullptr) {
+        if (error != nullptr) {
+          *error = describe_binding(line, index) + " binds endpoint '" +
+                   member.endpoint_id + "', which no endpoint declares";
+        }
+        return false;
+      }
+      // A channel is an index into the endpoint's *own* declared channels, so a
+      // member may leave a direction unbound (-1) but may not reach past what its
+      // endpoint carries.
+      if (member.talk_channel >= 0 && static_cast<size_t>(member.talk_channel) >=
+                                          endpoint->talk_channels.size()) {
+        if (error != nullptr) {
+          *error = describe_binding(line, index) + " binds talk_channel " +
+                   std::to_string(member.talk_channel) + " of endpoint '" +
+                   endpoint->id + "' (" + endpoint->name + "), which declares " +
+                   std::to_string(endpoint->talk_channels.size()) +
+                   " talk channel(s)";
+        }
+        return false;
+      }
+      if (member.listen_channel >= 0 &&
+          static_cast<size_t>(member.listen_channel) >=
+              endpoint->listen_channels.size()) {
+        if (error != nullptr) {
+          *error = describe_binding(line, index) + " binds listen_channel " +
+                   std::to_string(member.listen_channel) + " of endpoint '" +
+                   endpoint->id + "' (" + endpoint->name + "), which declares " +
+                   std::to_string(endpoint->listen_channels.size()) +
+                   " listen channel(s)";
+        }
+        return false;
+      }
+    }
+  }
+  return true;
+}
 
 IntercomMatrix::IntercomMatrix(unsigned sample_rate)
     : sample_rate_(sample_rate == 0 ? 48000 : sample_rate),
@@ -65,6 +212,45 @@ bool IntercomMatrix::plan_from_config(const Config& config, MatrixPlan* plan,
     planned.listen_channels = endpoint.listen_channels;
     resolved.endpoints.push_back(std::move(planned));
   }
+  std::vector<std::string> endpoint_ids;
+  for (const auto& endpoint : resolved.endpoints) {
+    endpoint_ids.push_back(endpoint.id);
+  }
+  if (!refuse_duplicate_ids(endpoint_ids, "endpoints", error)) {
+    return false;
+  }
+
+  for (const auto& line : config.party_lines) {
+    MatrixLinePlan planned;
+    planned.id = line.id;
+    planned.name = line.name.empty() ? line.id : line.name;
+    planned.claims_conference = line.claims_conference;
+    for (const auto& member : line.members) {
+      MatrixMemberPlan planned_member;
+      planned_member.endpoint_id = member.endpoint;
+      planned_member.talk_channel = member.talk_channel;
+      planned_member.listen_channel = member.listen_channel;
+      planned_member.contribution_db = member.contribution_db;
+      planned_member.mute = member.mute;
+      planned.members.push_back(std::move(planned_member));
+    }
+    resolved.lines.push_back(std::move(planned));
+  }
+  std::vector<std::string> line_ids;
+  for (const auto& line : resolved.lines) {
+    line_ids.push_back(line.id);
+  }
+  if (!refuse_duplicate_ids(line_ids, "party lines", error) ||
+      !refuse_duplicate_names(resolved, error)) {
+    return false;
+  }
+
+  // The bindings, before anything is applied: a member that names an endpoint
+  // nobody declared, or a channel its endpoint does not carry, is exactly the
+  // typo this refusal exists for.
+  if (!validate_plan(resolved, error) || !refuse_claimed_twice(resolved, error)) {
+    return false;
+  }
 
   // The declared shapes decide how wide the device has to be.  Refusing here -
   // with both totals - is what stops a configuration that asks for more channels
@@ -85,22 +271,6 @@ bool IntercomMatrix::plan_from_config(const Config& config, MatrixPlan* plan,
     return false;
   }
 
-  for (const auto& line : config.party_lines) {
-    MatrixLinePlan planned;
-    planned.id = line.id;
-    planned.name = line.name.empty() ? line.id : line.name;
-    planned.claims_conference = line.claims_conference;
-    for (const auto& member : line.members) {
-      MatrixMemberPlan planned_member;
-      planned_member.endpoint_id = member.endpoint;
-      planned_member.talk_channel = member.talk_channel;
-      planned_member.listen_channel = member.listen_channel;
-      planned_member.contribution_db = member.contribution_db;
-      planned_member.mute = member.mute;
-      planned.members.push_back(std::move(planned_member));
-    }
-    resolved.lines.push_back(std::move(planned));
-  }
   *plan = std::move(resolved);
   return true;
 }
@@ -113,6 +283,12 @@ bool IntercomMatrix::configure(const MatrixPlan& plan, std::string* error) {
     clear();
     LOG_INFO("matrix: no party lines configured");
     return true;
+  }
+
+  // A plan built in code reaches here without going through `plan_from_config`,
+  // so the bindings are checked again rather than indexed on trust.
+  if (!validate_plan(plan, error)) {
+    return false;
   }
 
   auto runtime = std::make_shared<Runtime>();
@@ -144,28 +320,13 @@ bool IntercomMatrix::configure(const MatrixPlan& plan, std::string* error) {
           break;
         }
       }
+      // `validate_plan` has already refused a plan without this endpoint, so this
+      // is a guard rather than a check.
       if (endpoint == nullptr) {
         if (error != nullptr) {
           *error = "party line '" + line.id +
                    "' has a member for unknown endpoint '" + member.endpoint_id +
                    "'";
-        }
-        return false;
-      }
-      if (member.talk_channel >= 0 && static_cast<size_t>(member.talk_channel) >=
-                                          endpoint->talk_channels.size()) {
-        if (error != nullptr) {
-          *error = "endpoint '" + endpoint->id + "' has no talk channel " +
-                   std::to_string(member.talk_channel);
-        }
-        return false;
-      }
-      if (member.listen_channel >= 0 &&
-          static_cast<size_t>(member.listen_channel) >=
-              endpoint->listen_channels.size()) {
-        if (error != nullptr) {
-          *error = "endpoint '" + endpoint->id + "' has no listen channel " +
-                   std::to_string(member.listen_channel);
         }
         return false;
       }

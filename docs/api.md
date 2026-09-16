@@ -27,6 +27,15 @@ Body: a full or partial config document (object merge, arrays are replaced whole
 Returns the effective configuration after the change. Fields that require a restart are
 reported as changed but take effect only after `POST /api/system/restart`.
 
+The merged document is validated before anything is written or applied, and a
+configuration that could not work is refused with `400` and a plain text reason naming
+the offending lines, channels, bindings or totals — two party lines with the same name
+or id, two endpoints with the same id, two endpoints claiming one device channel, a
+member channel outside the shape its endpoint declared, a member binding that names an
+endpoint nobody declares, or declared endpoint shapes wider than `audio.channels` opens.
+On a refusal neither the configuration file nor the running appliance is touched, so the
+reason can be fixed and resubmitted. The web UI shows the body as `save failed: …`.
+
 ## 4. `GET /api/status`
 
 Single poll endpoint used by the UI.

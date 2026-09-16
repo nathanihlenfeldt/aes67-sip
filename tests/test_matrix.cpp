@@ -766,6 +766,203 @@ TEST_CASE(matrix_mixes_eight_lines_across_every_endpoint) {
   CHECK_EQ(members, kChannels);
 }
 
+// ---------------------------------------------------------------------------
+// validation: a configuration that could not work is refused as a whole
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/**
+ * A configuration that works: two endpoints of two channels each, packed into
+ * four device channels, both members of one party line.
+ */
+Config valid_matrix_config() {
+  Config config = Config::from_json(json::object());
+  config.audio.channels = 4;
+  EndpointConfig first;
+  first.id = "a";
+  first.name = "Camera 1";
+  first.talk_channels = {0, 1};
+  first.listen_channels = {0, 1};
+  EndpointConfig second;
+  second.id = "b";
+  second.name = "Camera 2";
+  second.talk_channels = {2, 3};
+  second.listen_channels = {2, 3};
+  config.endpoints = {first, second};
+
+  PartyLineConfig line;
+  line.id = "cameras";
+  line.name = "Cameras";
+  PartyLineMemberConfig first_member;
+  first_member.endpoint = "a";
+  first_member.talk_channel = 0;
+  first_member.listen_channel = 0;
+  PartyLineMemberConfig second_member;
+  second_member.endpoint = "b";
+  second_member.talk_channel = 0;
+  second_member.listen_channel = 0;
+  line.members = {first_member, second_member};
+  config.party_lines = {line};
+  return config;
+}
+
+}  // namespace
+
+TEST_CASE(matrix_refuses_two_party_lines_with_the_same_name) {
+  Config config = valid_matrix_config();
+  PartyLineConfig second = config.party_lines[0];
+  second.id = "stage";  // a distinct id: the *name* is the duplicate here
+  second.name = "Cameras";
+  config.party_lines.push_back(second);
+
+  MatrixPlan plan;
+  std::string error;
+  CHECK(!IntercomMatrix::plan_from_config(config, &plan, &error));
+  CHECK(error.find("Cameras") != std::string::npos);
+
+  // Case and stray spacing are how two "different" names get typed, so they do
+  // not make a second line either.
+  config.party_lines[1].name = " cameras ";
+  CHECK(!IntercomMatrix::plan_from_config(config, &plan, &error));
+  CHECK(error.find("cameras") != std::string::npos);
+}
+
+TEST_CASE(matrix_refuses_two_lines_or_endpoints_sharing_an_id) {
+  // Two endpoints with one id: a binding names an endpoint by id, so the member
+  // that says "a" would mean both of them.
+  Config endpoints = valid_matrix_config();
+  EndpointConfig duplicate = endpoints.endpoints[0];
+  duplicate.name = "Camera 1 again";
+  endpoints.endpoints.push_back(duplicate);
+  MatrixPlan plan;
+  std::string error;
+  CHECK(!IntercomMatrix::plan_from_config(endpoints, &plan, &error));
+  CHECK(error.find("endpoints") != std::string::npos);
+  CHECK(error.find("'a'") != std::string::npos);
+
+  // Two party lines with one id: the status view keys a line by it.
+  Config lines = valid_matrix_config();
+  lines.party_lines.push_back(lines.party_lines[0]);
+  CHECK(!IntercomMatrix::plan_from_config(lines, &plan, &error));
+  CHECK(error.find("party lines") != std::string::npos);
+  CHECK(error.find("cameras") != std::string::npos);
+}
+
+TEST_CASE(matrix_refuses_a_device_channel_two_endpoints_claim) {
+  Config config = valid_matrix_config();
+  // "b" now talks on capture channel 1, which "a" already talks on.
+  config.endpoints[1].talk_channels = {1, 3};
+
+  MatrixPlan plan;
+  std::string error;
+  CHECK(!IntercomMatrix::plan_from_config(config, &plan, &error));
+  CHECK(error.find("device channel 1") != std::string::npos);
+  CHECK(error.find("Camera 1") != std::string::npos);  // first claimant
+  CHECK(error.find("Camera 2") != std::string::npos);  // and the second
+  // The claimants are named as the configuration writes them, so the two numbers
+  // in the sentence (device channel, array position) cannot be confused.
+  CHECK(error.find("talk_channels[0]") != std::string::npos);
+
+  // The listen direction is checked too, and named as the listen channel it is.
+  Config listen = valid_matrix_config();
+  listen.endpoints[1].listen_channels = {1, 3};
+  CHECK(!IntercomMatrix::plan_from_config(listen, &plan, &error));
+  CHECK(error.find("device channel 1") != std::string::npos);
+  CHECK(error.find("listen_channels[0]") != std::string::npos);
+
+  // Capture and playback are separate directions of the device, so a channel may
+  // be one endpoint's talk channel and another's listen channel: that is how the
+  // reference site packs sixteen beltpacks into 32 channels.
+  Config crossed = valid_matrix_config();
+  crossed.endpoints[0].listen_channels = {2, 3};
+  crossed.endpoints[1].listen_channels = {0, 1};
+  CHECK(IntercomMatrix::plan_from_config(crossed, &plan, &error));
+  CHECK(error.empty());
+}
+
+TEST_CASE(matrix_refuses_a_member_channel_outside_its_endpoints_shape) {
+  // "a" declares two talk channels, so talk_channel 2 does not exist.
+  Config config = valid_matrix_config();
+  config.party_lines[0].members[0].talk_channel = 2;
+  MatrixPlan plan;
+  std::string error;
+  CHECK(!IntercomMatrix::plan_from_config(config, &plan, &error));
+  // the whole refusal, so a passing check cannot be an unrelated member failure
+  CHECK(error.find(
+            "party line 'cameras' member 1 binds talk_channel 2 of endpoint 'a' "
+            "(Camera 1), which declares 2 talk channel(s)") != std::string::npos);
+
+  Config listen = valid_matrix_config();
+  listen.party_lines[0].members[1].listen_channel = 2;
+  CHECK(!IntercomMatrix::plan_from_config(listen, &plan, &error));
+  CHECK(
+      error.find("party line 'cameras' member 2 binds listen_channel 2 of endpoint "
+                 "'b' (Camera 2), which declares 2 listen channel(s)") !=
+      std::string::npos);
+}
+
+TEST_CASE(matrix_refuses_a_binding_to_an_endpoint_that_does_not_exist) {
+  Config config = valid_matrix_config();
+  config.party_lines[0].members[1].endpoint = "ghost";
+
+  MatrixPlan plan;
+  std::string error;
+  CHECK(!IntercomMatrix::plan_from_config(config, &plan, &error));
+  CHECK(error.find("party line 'cameras' member 2 binds endpoint 'ghost', which no "
+                   "endpoint declares") != std::string::npos);
+
+  // The same refusal protects the routing itself: a plan built in code is checked
+  // where it is indexed, not trusted.
+  MatrixPlan hand_built;
+  hand_built.endpoints.push_back(endpoint("a", {0}, {0}));
+  hand_built.lines.push_back(line("pl1", {member("ghost", 0, 0)}));
+  CHECK(!IntercomMatrix::validate_plan(hand_built, &error));
+  CHECK(error.find("ghost") != std::string::npos);
+  IntercomMatrix matrix;
+  CHECK(!matrix.configure(hand_built, &error));
+  CHECK(matrix.empty());
+
+  MatrixPlan too_far;
+  too_far.endpoints.push_back(endpoint("a", {0}, {0}));
+  too_far.lines.push_back(line("pl1", {member("a", 1, 0)}));
+  CHECK(!IntercomMatrix::validate_plan(too_far, &error));
+  CHECK(error.find("talk_channel 1") != std::string::npos);
+}
+
+TEST_CASE(matrix_accepts_a_valid_configuration_unchanged) {
+  Config config = valid_matrix_config();
+  config.party_lines[0].claims_conference = true;
+
+  std::string error;
+  CHECK(validate_configuration(config, &error));
+  CHECK(error.empty());
+
+  // "Loads unchanged" means what was declared is what the plan carries.
+  MatrixPlan plan;
+  CHECK(IntercomMatrix::plan_from_config(config, &plan, &error));
+  CHECK_EQ(plan.endpoints.size(), 2U);
+  CHECK_EQ(plan.endpoints[0].id, std::string("a"));
+  CHECK_EQ(plan.endpoints[1].talk_channels, std::vector<unsigned>({2, 3}));
+  CHECK_EQ(plan.lines.size(), 1U);
+  CHECK_EQ(plan.lines[0].id, std::string("cameras"));
+  CHECK(plan.lines[0].claims_conference);
+  CHECK_EQ(plan.lines[0].members.size(), 2U);
+  CHECK_EQ(plan.lines[0].members[1].endpoint_id, std::string("b"));
+  CHECK_EQ(plan.lines[0].members[1].talk_channel, 0);
+  CHECK_EQ(plan.lines[0].members[1].listen_channel, 0);
+
+  // A configuration with no party lines at all is valid, as it always was,
+  // including one that declares endpoints nobody has routed yet.
+  Config none = Config::from_json(json::object());
+  none.endpoints = config.endpoints;
+  CHECK(validate_configuration(none, &error));
+  CHECK(error.empty());
+  MatrixPlan empty_plan;
+  CHECK(IntercomMatrix::plan_from_config(none, &empty_plan, &error));
+  CHECK(empty_plan.empty());
+}
+
 TEST_CASE(matrix_applies_the_contribution_level) {
   MatrixPlan plan;
   plan.endpoints.push_back(endpoint("a", {0}, {0}));

@@ -612,6 +612,126 @@ TEST_CASE(gateway_mixes_the_reference_scale_in_a_single_run) {
   gateway.stop();
 }
 
+TEST_CASE(rest_api_refuses_a_configuration_that_could_not_work) {
+  Gateway gateway(true, [](Config& config) { config = party_line_config(); });
+  // the same wiring as the appliance: an accepted edit is applied, a refused one
+  // never gets that far
+  gateway.api->set_restart_handler([&gateway](std::string* restart_error) {
+    return gateway.lines->apply_configuration(restart_error);
+  });
+  CHECK(gateway.start());
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  // A second party line is accepted, so the editor still works...
+  const json before = get_json(client, "/api/config");
+  CHECK(!before.is_null());
+  json lines = before.at("party_lines");
+  CHECK_EQ(lines.size(), 1U);
+  json second = lines[0];
+  second["id"] = "stage";
+  second["name"] = "Stage";
+  lines.push_back(second);
+  const auto accepted = client.Post(
+      "/api/config", json{{"party_lines", lines}}.dump(), "application/json");
+  CHECK(accepted && accepted->status == 200);
+  CHECK_EQ(get_json(client, "/api/config").at("party_lines").size(), 2U);
+  Config persisted;
+  std::string error;
+  CHECK(Config::load(kTestConfigPath, &persisted, &error));
+  CHECK_EQ(persisted.party_lines.size(), 2U);
+
+  // ...and one that names a line twice is refused where it is edited: 400 with
+  // the reason, and neither the running configuration nor the file changed.
+  json clashing = get_json(client, "/api/config").at("party_lines");
+  clashing[1]["name"] = "Cameras";
+  const auto refused = client.Post(
+      "/api/config", json{{"party_lines", clashing}}.dump(), "application/json");
+  CHECK(refused && refused->status == 400);
+  CHECK(refused->body.find("Cameras") != std::string::npos);
+  CHECK_EQ(get_json(client, "/api/config").at("party_lines").size(), 2U);
+  Config still;
+  CHECK(Config::load(kTestConfigPath, &still, &error));
+  CHECK_EQ(still.party_lines.size(), 2U);
+  CHECK_EQ(still.party_lines[1].name, std::string("Stage"));
+
+  // A valid document with no party lines at all still loads, as it always did:
+  // the validation is additive, not a new requirement to declare a matrix.
+  const auto cleared =
+      client.Post("/api/config", json{{"party_lines", json::array()}}.dump(),
+                  "application/json");
+  CHECK(cleared && cleared->status == 200);
+  CHECK(get_json(client, "/api/status").at("party_lines").empty());
+  Config no_lines;
+  CHECK(Config::load(kTestConfigPath, &no_lines, &error));
+  CHECK(no_lines.party_lines.empty());
+
+  gateway.stop();
+  std::remove(kTestConfigPath.c_str());
+}
+
+TEST_CASE(gateway_refuses_an_invalid_configuration_as_a_whole) {
+  // Every refusing case, checked the same way: the refusal names what is wrong,
+  // and no part of the configuration reaches SIP, the daemon or the matrix.
+  struct Case {
+    const char* what;
+    void (*break_it)(Config&);
+    const char* expect;
+  };
+  const Case cases[] = {
+      {"a second line with the same name",
+       [](Config& config) {
+         PartyLineConfig second = config.party_lines[0];
+         second.id = "stage";  // a distinct id: the name is the duplicate
+         second.name = "Cameras";
+         config.party_lines.push_back(second);
+       },
+       "two party lines are called 'Cameras'"},
+      {"a second endpoint with the same id",
+       [](Config& config) { config.endpoints.push_back(config.endpoints[0]); },
+       "two endpoints share the id 'a'"},
+      {"a device channel claimed by two endpoints",
+       [](Config& config) { config.endpoints[1].talk_channels = {0}; },
+       "device channel 0 is claimed twice"},
+      {"a member channel outside its endpoint's shape",
+       [](Config& config) { config.party_lines[0].members[1].listen_channel = 3; },
+       "binds listen_channel 3 of endpoint 'b' (Camera 2)"},
+      {"a binding to an endpoint nobody declares",
+       [](Config& config) { config.party_lines[0].members[1].endpoint = "ghost"; },
+       "binds endpoint 'ghost', which no endpoint declares"},
+  };
+
+  for (const auto& entry : cases) {
+    Gateway gateway(true, [&entry](Config& config) {
+      config = party_line_config();
+      entry.break_it(config);
+    });
+    std::string error;
+    CHECK(!gateway.lines->apply_configuration(&error));
+    CHECK(error.find(entry.expect) != std::string::npos);
+
+    // Nothing applied: no SIP registration, no daemon stream, no routing.  A
+    // half-wired site is what this refusal is for.
+    CHECK(gateway.engine->account_status().empty());
+    json sources;
+    json sinks;
+    std::string daemon_error;
+    CHECK(gateway.daemon->get_sources(&sources, &daemon_error));
+    CHECK_EQ(sources.at("sources").size(), 0U);
+    CHECK(gateway.daemon->get_sinks(&sinks, &daemon_error));
+    CHECK_EQ(sinks.at("sinks").size(), 0U);
+    CHECK(gateway.matrix->empty());
+  }
+
+  // The same configuration with nothing broken is applied - and then the accounts
+  // are registered, so the checks above discriminate rather than passing because
+  // the engine and the daemon never report anything.
+  Gateway gateway(true, [](Config& config) { config = party_line_config(); });
+  std::string error;
+  CHECK(gateway.lines->apply_configuration(&error));
+  CHECK(!gateway.engine->account_status().empty());
+}
+
 TEST_CASE(rest_api_self_test_reports_checks) {
   Gateway gateway;
   CHECK(gateway.start());

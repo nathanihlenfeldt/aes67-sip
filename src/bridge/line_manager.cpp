@@ -371,10 +371,11 @@ void LineManager::remove_daemon_streams(const LineConfig& line) {
 }
 
 bool LineManager::apply_configuration(std::string* error) {
-  // The matrix plan is resolved *before* anything is touched, so a
-  // configuration whose declared channels do not fit the device is refused as a
-  // whole, with both totals, rather than applied down to the channels that
-  // happen to fit and leaving the rest of the site silently unheard.
+  // The whole configuration is validated *before* anything is touched, so a
+  // configuration that could not work is refused as a whole (see
+  // `IntercomMatrix::plan_from_config`) rather than applied down to the parts that
+  // happen to fit: no lines registered and no streams provisioned from a
+  // configuration that is going to be rejected.
   MatrixPlan plan;
   if (matrix_ != nullptr &&
       !IntercomMatrix::plan_from_config(*config_, &plan, error)) {

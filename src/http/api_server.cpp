@@ -215,7 +215,19 @@ void ApiServer::register_routes() {
                 reply_error(response, 400, error);
                 return;
               }
-              config_->merge(patch);
+              // The change is validated *before* it is written or applied: a
+              // configuration that could not work has to leave both the file and
+              // the running appliance exactly as they were, and the reason is
+              // what the editor shows.  Validating the candidate rather than the
+              // live configuration is what keeps a refusal from being a
+              // half-applied edit.
+              Config candidate = *config_;
+              candidate.merge(patch);
+              if (!validate_configuration(candidate, &error)) {
+                reply_error(response, 400, error);
+                return;
+              }
+              *config_ = candidate;
               if (!config_->save(config_path_, &error)) {
                 reply_error(response, 500, error);
                 return;
