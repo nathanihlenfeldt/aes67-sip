@@ -51,12 +51,21 @@ its own spec, and nothing enters it without a driver from the reference site.
 
 ## Making "complete" measurable
 
-"Most complete" needs a frame, or it is unfalsifiable. The artifact to build is a
-**capability scorecard**: the family list above as rows, the incumbent systems and
-this project as columns, each cell citing the vendor's own documentation. It turns
-the ambition into a work list, shows honestly where the project is behind, and stops
-the claim drifting into marketing. Filling it in is a primary-source research job,
-not an opinion.
+"Most complete" needs a frame, or it is unfalsifiable. The artifact is the
+**[capability scorecard](capability-scorecard.md)**: the family list above as rows, the
+incumbent systems and this project as columns, each cell resting on that vendor's own
+documentation. It turns the ambition into a work list, shows honestly where the project is
+behind, and stops the claim drifting into marketing.
+
+Its first run (2026-09-17) grades every row for this project and for three systems it could
+reach - Clear-Com Eclipse HX, the Studio Technologies 5422A and the AES67 daemon - and leaves
+Riedel Artist and RTS/Telex entirely `?` rather than guessing: their own documentation is behind
+logins and script-rendered pages from this environment. The document
+names the artefact that would settle each hole and is written to be re-run. What it already
+shows is in its ranking: security and management first (an unauthenticated control surface is
+not a product), then mix intelligence and IFB - the two capabilities of the 5422A this
+appliance replaces and does not yet have.
+
 
 ## The honest risks
 
