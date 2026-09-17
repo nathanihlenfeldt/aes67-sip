@@ -1706,7 +1706,17 @@ TEST_CASE(rest_api_self_test_is_honest_when_it_cannot_judge_the_matrix) {
     config = party_line_config();
     config.sip.enabled = false;
   });
-  CHECK(no_sip.start());
+  gateway_up(no_sip);
+  // The members' audio has to be arriving before the self-test can report it, and
+  // the meters take a moment to rise: wait for the same fact on the status document
+  // the check reads, rather than sampling once and hoping on a busy machine.
+  CHECK(no_sip.wait_for(
+      [](const json& status) {
+        const json lines = status.at("party_lines");
+        return !lines.empty() &&
+               json_get<int>(lines[0].at("summary"), "arriving", 0) == 2;
+      },
+      4000));
   const json with_sip_down = run_self_test(client);
   const json judged =
       self_test_check(with_sip_down, "party line cameras (Cameras)");

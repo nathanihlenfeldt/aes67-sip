@@ -611,7 +611,7 @@ export default function PartyLines() {
                 <span className="mono">{endpoint.name || endpoint.id}</span>{' '}
                 {hasEndpointSdp(endpoint)
                   ? '· its talk stream is described, so the appliance can subscribe to it'
-                  : '· its talk stream has no description yet — pick or paste the endpoint SDP on the AES67 page'}
+                  : '· its talk stream has no description yet — set endpoints[].aes67.remote_source_id (or remote_sdp) on the Settings page'}
               </p>
               {offendsEndpoint(endpoint) ? <div className="inline-error">{saveError}</div> : null}
             </div>

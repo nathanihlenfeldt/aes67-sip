@@ -4,6 +4,24 @@ Status: **agreed with the site owner** (2026-09-15). This file is the single sou
 truth for scope; code, config, docs and the installer must follow it. Anything not
 listed here is either an implementation detail or an open item at the bottom.
 
+**Superseded in part, 2026-09-16.** Two ADRs now govern the parts of this file they name,
+and where this file and an ADR disagree, the ADR is the decision:
+
+- **[ADR-0001](adr/0001-local-matrix-in-the-same-codebase.md)** - the party-line matrix lives
+  in this codebase, independent of the SIP engine. That replaces the "4-wire intercom
+  endpoints ... one channel per line" picture below with the **endpoint-agnostic** model:
+  an endpoint declares how many talk and listen channels it has, and the matrix never
+  assumes a shape (`CONTEXT.md`). Decision 6's statement that *the conference is the intercom
+  matrix* is superseded too: the matrix is local, and the conference is one participant in it.
+- **[ADR-0002](adr/0002-appliance-replaces-the-5422a.md)** - the appliance replaces the site's
+  Studio Technologies 5422A, with no hardware fallback.
+
+Decisions 2, 3, 4, 5 and 7-13 below still stand. **#1 is superseded by ADR-0002** (the site's
+endpoints are M371A beltpacks with two talk and two listen channels, not 4-wire panels with no
+keying), and **#6 by ADR-0001** (the matrix is local; the conference is one participant in it).
+#4 ("one AES67 channel per line, one call per channel") still describes the SIP-facing line
+path; the matrix binds an endpoint's own channels through its members.
+
 ## What this is
 
 A Linux appliance that bridges **AES67 intercom endpoints on a production site** to a
@@ -17,7 +35,7 @@ It is not a softphone for a human: there is no handset, no ring tone, no PTT.
  │ 4-wire intercom endpoints│                    │  FreePBX             │
  │  (AES67 send + receive)  │                    │   conference 1001    │
  └───────┬──────────────────┘                    └──────────▲───────────┘
-         │ AES67 / RTP L16 48 kHz over multicast            │ SIP + RTP
+         │ AES67 / RTP L24 48 kHz over multicast            │ SIP + RTP
          │ (1 channel per line)                             │ G.722, 20 ms
  ┌───────▼──────────────────────────────────────────┐       │
  │ Raspberry Pi appliance                           │       │
@@ -37,18 +55,19 @@ It is not a softphone for a human: there is no handset, no ring tone, no PTT.
 | 3 | **Either direction is valid:** we may dial the PBX conference, or the PBX may dial our extension and we answer | `permanent` is in the auto-answer set so an inbound INVITE is answered, then held |
 | 4 | **One AES67 channel per line, one call per channel** | `aes67.channels: [n]` (mono); multichannel lines are not used |
 | 5 | **G.722 is the payload** (16 kHz, 20 ms ptime), G.711u only as a fallback | `sip.codecs: ["G722/16000/1","PCMU/8000/1"]`; the router converts 48k<->16k exactly (/3) |
-| 6 | **PBX is FreePBX with a conference**; the conference is the intercom matrix | One extension per line; `dial_target` points at the conference |
+| 6 | **PBX is FreePBX with a conference**; the conference is one participant in the local matrix (see ADR-0001: this file's original "the conference is the intercom matrix" is superseded) | One extension per line; `dial_target` points at the conference; a party line claims it with `claims_conference` |
 | 7 | **NAT-free via ZeroTier** on the appliance, or a public FreePBX IP | Installer flag `--zerotier-network <id>`; no SRTP/TLS for now (`srtp: disabled`, transport udp) |
 | 8 | **AES67 streams are found by discovery (SAP/mDNS)** | The daemon browses; the gateway matches a discovered source per line and programs the sink with that SDP (`use_sdp: true`). A manual SDP override stays available |
 | 9 | **Deployment: clean install on a Raspberry Pi from a single public URL, one command** | `scripts/install.sh`; installs kernel module (DKMS), daemon, PJSIP, gateway, web UI, systemd units, sysctls |
 | 10 | **GPL-3.0** (PJSIP is GPLv2+, aes67-daemon is GPLv3) | `LICENSE` |
-| 11 | 8 lines / 8 RAVENNA channels to start, expandable | `config/aes67-sip.conf`; the daemon supports up to 64 |
+| 11 | 8 lines / 8 RAVENNA channels to start, expandable. **The reference site runs 32 channels per direction** (16 beltpacks, two each way) and eight party lines (ADR-0002); the shipped sample still opens 8 | `config/aes67-sip.conf`; the daemon supports up to 64 |
 | 12 | **No echo cancellation**, gateway latency target <30 ms | Endpoints and PBX side own their echo; AEC is out of scope |
 | 13 | **AES67 payload is L24** (24 bit linear), for Dante interoperability | `aes67.codec` per line, default `L24`; the ALSA side runs `s24_3le` by default so the 24 bits are real, with an automatic `s16_le` fallback; the sink's payload comes from the endpoint's SDP |
 
 ## Audio path and levels
 
-- AES67 side: L16 48 kHz, 1 ms packets (`period_frames: 48`) on the RAVENNA device;
+- AES67 side: **L24** 48 kHz, 1 ms packets (`period_frames: 48`) on the RAVENNA device
+  (decision 13);
   ALSA PCM format `s16_le` (the driver also supports `s24_3le`/`s32_le`).
 - SIP side: G.722 16 kHz mono, 20 ms ptime.
 - The resampler is an integer-ratio polyphase FIR, so 48k<->16k is exact and drift
@@ -83,10 +102,15 @@ a preflight report (PTP lock, daemon reachable, ALSA device present).
    `ACCESS_DENIED` until then).
 3. **How the endpoints subscribe to our stream**: the gateway's *source* is created on
    the RAVENNA device and advertised over SAP; confirm the panels either subscribe by
-   SAP/Ravenna or are configured with our multicast address by hand.
+   SAP/Ravenna or are configured with our multicast address by hand. **Answered for the
+   reference site's first family** (a Dante-capable beltpack in AES67 mode subscribes in
+   Dante Controller, and the appliance finds the endpoint's flow by discovery):
+   [docs/runbook.md](../docs/runbook.md).
 4. **Is there a PTP grandmaster on the AES67 VLAN?** Without one the RAVENNA device
    never locks and no audio flows (`GET /api/aes67/ptp/status` shows `unlocked`).
-5. Panel model/brand, and the final line count at commissioning.
+5. Panel model/brand, and the final line count at commissioning. **Known for the first
+   deployment**: the Studio Technologies M371A beltpack (2 talk, 2 listen; Dante, AES67
+   mode), and the reference site's scale is eight lines / 32 RAVENNA channels.
 6. Whether the appliance gets a static IP / DHCP reservation on the AES67 VLAN
    (recommended).
 

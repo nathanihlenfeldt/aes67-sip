@@ -100,3 +100,19 @@ _Avoid_: foldback, cue, talkback
 The off-site FreePBX conference: the cross-site talk path, and the one participant
 that is not on the site.
 _Avoid_: bridge, mixer, PBX room
+
+**Commissioning tone**:
+A steady tone the appliance can put on one line's output, so a path can be proven
+before anyone trusts it: it leaves on that line's device channels and is heard by
+whoever is subscribed to the stream carrying them. The UI and the code also call it
+the "test tone" (`test_tone`, `POST /api/lines/{id}/tone`).
+_Avoid_: beep, test signal. Not a **call tone**, which is an endpoint's own signal.
+
+**Call tone**:
+The in-band signal an endpoint sends down one of its talk channels to alert the other
+members of a party line - a 20 kHz tone on the beltpack family, summed with the talk
+audio. It rides the ordinary audio path, so it needs no control plane; and because it
+is in-band, an auto-mix bus can attenuate it.
+_Avoid_: call (a **call** is a SIP call: "one SIP account and one call"), ring tone
+
+

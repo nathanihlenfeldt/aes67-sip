@@ -30,7 +30,10 @@ push-to-talk. Audio is 4-wire and continuous; a call, once up, stays up.
 ```
 
 Scope, decisions and open items are recorded in **[docs/DECISIONS.md](docs/DECISIONS.md)**;
-the REST contract is in **[docs/api.md](docs/api.md)**.
+the REST contract is in **[docs/api.md](docs/api.md)**; **where the product is going** - the
+feature families, their hooks and the honest risks - is in
+**[docs/ROADMAP.md](docs/ROADMAP.md)**; and the commissioning procedure for one endpoint
+family is **[docs/runbook.md](docs/runbook.md)**.
 
 ## Install (Raspberry Pi, one command)
 
@@ -131,6 +134,9 @@ intercom use case:
   `permanent` line dials nothing without a target - a fresh appliance should not try to
   register extensions nobody has created yet.
 - One AES67 **channel per line** (`aes67.channels: [n]`) and one call per channel.
+- `audio.channels` is the width of the RAVENNA device, and every line's and endpoint's channels
+  have to fit inside it. The sample opens **8**; the reference site runs **32** (16 beltpacks,
+  two channels each way), so raise it with the site's channel plan before commissioning.
 - `aes67.codec` is the RTP payload our **source** advertises: **`L24` by default**
   (Dante and most AES67 devices), or `L16`/`L2432`/`AM824`/`L32`. The sink's payload
   isn't configured here - it comes from the endpoint's SDP.
@@ -150,6 +156,50 @@ intercom use case:
 - `aes67.ignore_refclk_gmid` skips the daemon's PTP grandmaster check on the SDP - only
   needed when an endpoint advertises a different grandmaster than the locked one.
 
+### Endpoints and party lines (the matrix)
+
+A **line** is the SIP-facing path: a call, with the device channels it bridges. The **matrix**
+is a separate layer beside it, configured by `endpoints[]` and `party_lines[]` - an endpoint is
+a participant with a declared shape, and a party line is a set of members. Both layers have
+their own `aes67` block and their own daemon streams (`lines[].aes67.channels` bridges *that
+line's* channels to *that call*; `endpoints[].aes67` is the stream pair for *that endpoint's*
+talk and listen directions). The shipped sample has an empty `endpoints[]` and `party_lines[]`
+because a fresh appliance runs SIP lines only.
+
+```json
+"endpoints": [
+  { "id": "pack-1", "name": "Camera 1",
+    "talk_channels": [0, 1], "listen_channels": [0, 1],
+    "aes67": { "stream_name": "Camera 1", "auto_create_streams": true,
+               "codec": "L24", "remote_source_id": "...", "remote_sdp": "" } }
+],
+"party_lines": [
+  { "id": "pl1", "name": "PL 1", "claims_conference": false,
+    "members": [ { "endpoint": "pack-1", "talk_channel": 0, "listen_channel": 1,
+                   "contribution_db": 0.0, "mute": false } ] }
+]
+```
+
+- An endpoint declares **how many talk and listen channels it has** and which device
+  (RAVENNA) channels those map onto: that is the shape, and it is all the matrix knows about
+  the device behind it. A two-channel beltpack and a 64-channel console are the same kind of
+  thing at different widths. The highest channel used must be inside `audio.channels`.
+- A **member** is one endpoint's place on one party line: which of that endpoint's own talk
+  channels contributes, which listen channel hears the line, that member's contribution level
+  in dB, and mute. Membership *is* the routing - every member hears every other member at their
+  levels and never themselves (mix-minus is built into the mix, not configured), and a muted
+  member is not heard by the others while still hearing them.
+- The endpoint's own `aes67` block names its streams: `stream_name`, `auto_create_streams`
+  (whether the appliance creates the daemon sink/source for it), `codec` (the payload our
+  **source** advertises towards it - its listen feed), and `remote_source_id`/`remote_sdp`
+  (the endpoint's own stream that our **sink** subscribes to, picked from discovery or pasted).
+- The appliance refuses a matrix that could not work, naming the entry: two endpoints claiming
+  one device channel, a binding outside the shape the endpoint declared, a member naming an
+  endpoint nobody declares, an endpoint shape wider than the device, duplicate ids or names.
+- The commissioning view and editor for all of this is the **Party lines** page; the
+  procedure for bringing up one endpoint family is **[docs/runbook.md](docs/runbook.md)**.
+
+
 ## Commissioning
 
 1. `sudo systemctl status aes67-daemon aes67-sip`
@@ -161,11 +211,9 @@ intercom use case:
    - **Dashboard** - PTP, daemon reachability, SIP registrations, per-line state/levels,
      the conference leg when one is configured, and each party line with who is arriving
      and who has gone silent
-   - **Lines** - channel mapping, gain/mute, call controls, DTMF, commissioning test tone,
+   - **Lines** - channel mapping, gain/mute, call controls, DTMF, the commissioning tone,
      and the conference card (enable the off-site leg, its account and target, dial now,
-     hang up),
-     and the conference leg: enable it, pick its account and the conference to dial, save,
-     dial it now or hang it up
+     hang up)
    - **Party lines** - the commissioning view and editor: each line with its members,
      their contribution levels and live levels, and membership, levels and per-channel
      bindings edited here rather than in JSON
@@ -241,7 +289,8 @@ src/http/     REST API used by the UI (see docs/api.md)
 webui/        Vite + React UI (dark operator console)
 scripts/      install.sh, uninstall.sh, build-pjsip.sh, install-deps.sh, setup-ravenna.sh
 systemd/      aes67-sip.service
-docs/         DECISIONS.md (agreed scope), api.md (REST contract)
+docs/         DECISIONS.md (agreed scope), ROADMAP.md (direction), api.md (REST contract),
+               runbook.md (commissioning one endpoint family)
 ```
 
 ## Limitations
