@@ -804,11 +804,26 @@ void LineManager::on_incoming_call(int line_id, const std::string& remote_uri) {
   }
   LOG_INFO("line ", line_id, ": incoming call from ", remote_uri,
            answer ? " (auto answering)" : " (waiting for the operator)");
-  if (answer && engine_ != nullptr) {
-    std::string error;
-    if (!engine_->answer(line_id, &error)) {
-      LOG_WARN("line ", line_id, ": cannot auto answer: ", error);
-    }
+  if (!answer || engine_ == nullptr) {
+    return;
+  }
+
+  std::string error;
+  if (engine_->answer(line_id, &error)) {
+    // Names who took the call, so the journal says whether an answer came from the
+    // appliance or from an operator.
+    LOG_INFO("line ", line_id, ": answered the call from ", remote_uri);
+    return;
+  }
+  // The reason travels to the line's status as well as the journal: a line that
+  // cannot answer an inbound call is the one state the caller hears as silence, and
+  // the operator should not have to read a journal to find out why.
+  LOG_WARN("line ", line_id, ": cannot auto answer: ", error);
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = lines_.find(line_id);
+  if (it != lines_.end()) {
+    it->second->detail =
+        "the call from " + remote_uri + " could not be answered: " + error;
   }
 }
 

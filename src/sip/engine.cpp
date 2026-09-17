@@ -371,6 +371,10 @@ CallStatus StubSipEngine::call_status(int line_id) const {
 
 bool StubSipEngine::simulate_call_failure(int line_id, const std::string& reason,
                                           std::string* error) {
+  // The lock is held across the two callbacks this delivers (`on_media_stop`, then
+  // `on_line_state`), which is safe only because neither handler calls back into
+  // the engine.  `simulate_incoming_call` is the hook whose handler does, and it
+  // releases the lock for that reason - the rule `SipEngineCallback` states.
   std::lock_guard<std::mutex> lock(impl_->mutex);
   const auto it = impl_->lines.find(line_id);
   if (it == impl_->lines.end()) {
@@ -396,24 +400,31 @@ bool StubSipEngine::simulate_call_failure(int line_id, const std::string& reason
 bool StubSipEngine::simulate_incoming_call(int line_id,
                                            const std::string& remote_uri,
                                            std::string* error) {
-  std::lock_guard<std::mutex> lock(impl_->mutex);
-  const auto it = impl_->lines.find(line_id);
-  if (it == impl_->lines.end()) {
-    if (error) {
-      *error = "unknown line " + std::to_string(line_id);
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    const auto it = impl_->lines.find(line_id);
+    if (it == impl_->lines.end()) {
+      if (error) {
+        *error = "unknown line " + std::to_string(line_id);
+      }
+      return false;
     }
-    return false;
+    Impl::LineRuntime& line = it->second;
+    line.call = CallStatus{};
+    line.call.active = true;
+    line.call.remote_uri = remote_uri;
+    line.call.state = "ringing";
+    line.inbound = true;
+    impl_->notify_state(line, LineState::kRinging, 180, "incoming " + remote_uri);
   }
-  Impl::LineRuntime& line = it->second;
-  line.call = CallStatus{};
-  line.call.active = true;
-  line.call.remote_uri = remote_uri;
-  line.call.state = "ringing";
-  line.inbound = true;
+  // The ring is delivered first and the application afterwards, with the lock
+  // released: a line that answers an inbound call calls back into the engine, and
+  // holding this lock across the application's callback would wedge that path - the
+  // rule `SipEngineCallback` states, and the shape of bug this hook exists to
+  // catch.
   if (impl_->callback != nullptr) {
-    impl_->callback->on_incoming_call(line.config.id, remote_uri);
+    impl_->callback->on_incoming_call(line_id, remote_uri);
   }
-  impl_->notify_state(line, LineState::kRinging, 180, "incoming " + remote_uri);
   return true;
 }
 

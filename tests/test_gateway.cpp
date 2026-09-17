@@ -465,6 +465,67 @@ TEST_CASE(rest_api_serves_status_and_controls_lines) {
   gateway.stop();
   std::remove(kTestConfigPath.c_str());
 }
+TEST_CASE(
+    an_inbound_call_is_answered_by_an_auto_answering_line_and_left_for_a_manual_one) {
+  // The caller-facing half: an INVITE to a line the appliance answers must end up
+  // in a call, and one to a manual line must be left for the operator.  This pins
+  // the policy and the plumbing at the seam the suite can reach - the stub's
+  // simulate_incoming_call - and no test here runs pjsua, so the *threading* rule
+  // the appliance got wrong (that the answer must not be issued from inside a
+  // library callback, which holds the library's own lock) is still the appliance's
+  // to prove.
+  Gateway gateway(true, [](Config& config) {
+    config.lines[0].sip.call_mode = "auto_answer";
+    config.lines[0].sip.extension = "1001";
+    LineConfig second;
+    second.id = 1;
+    second.name = "Stage Right";
+    second.aes67.channels = {2};
+    second.sip.extension = "1002";
+    second.sip.call_mode = "manual";
+    config.lines.push_back(second);
+  });
+  gateway_up(gateway);
+  httplib::Client client("127.0.0.1", kTestPort);
+  client.set_connection_timeout(2, 0);
+
+  const auto line_state = [](const json& status, int id) {
+    for (const auto& line : status.at("lines")) {
+      if (line.at("id").get<int>() == id) {
+        return line.at("state").get<std::string>();
+      }
+    }
+    return std::string{};
+  };
+
+  std::string error;
+  CHECK(gateway.stub()->simulate_incoming_call(0, "sip:306@10.10.50.2", &error));
+  CHECK(gateway.wait_for(
+      [&line_state](const json& status) {
+        return line_state(status, 0) == "in_call";
+      },
+      4000));
+
+  // The manual line is left ringing: answering is the operator's, not the
+  // appliance's.
+  CHECK(gateway.stub()->simulate_incoming_call(1, "sip:306@10.10.50.2", &error));
+  CHECK_EQ(line_state(get_json(client, "/api/status"), 1), std::string("ringing"));
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  CHECK_EQ(line_state(get_json(client, "/api/status"), 1), std::string("ringing"));
+
+  // ...and they can still answer it themselves.
+  const auto answered = client.Post(
+      "/api/lines/1/call", json{{"action", "answer"}}.dump(), "application/json");
+  CHECK(answered && answered->status == 200);
+  CHECK(gateway.wait_for(
+      [&line_state](const json& status) {
+        return line_state(status, 1) == "in_call";
+      },
+      4000));
+
+  gateway.stop();
+  std::remove(kTestConfigPath.c_str());
+}
 
 // ---------------------------------------------------------------------------
 // scale: per-endpoint provisioning at 32 channels

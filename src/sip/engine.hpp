@@ -57,6 +57,16 @@ class SipMediaSource {
 };
 
 /** Events pushed by the SIP engine towards the LineManager. */
+/**
+ * Callbacks the SIP engine delivers to the application (the LineManager).
+ *
+ * **A handler must not make a blocking call back into the engine.**  An engine may
+ * deliver a callback while it holds its own lock or from a thread that cannot
+ * complete such a call, so an answer issued from inside `on_incoming_call` used to
+ * deadlock against the library and time out.  Where an engine can, it delivers
+ * these through its own queue instead (`PjsipSipEngine::post`) - but the rule is
+ * the handler's, not the engine's.
+ */
 class SipEngineCallback {
  public:
   virtual ~SipEngineCallback() = default;

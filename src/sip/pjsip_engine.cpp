@@ -580,9 +580,19 @@ void PjsipSipEngine::notify_incoming_call(int line_id,
   status.state = "incoming";
   status.state_code = 180;
   store_call_status(line_id, status);
-  if (callback_ != nullptr) {
-    callback_->on_incoming_call(line_id, remote_uri);
-  }
+  // The application's reaction is delivered on the engine's own thread, never on
+  // the thread the library is calling us on.  The library invokes this callback
+  // while it holds its own lock; the handler answers through `answer()`, which
+  // queues a job and waits for it, and that job cannot complete while the blocked
+  // callback's thread holds the lock - so the answer timed out and the call was
+  // never picked up. Deferring the delivery through `post()` breaks the cycle: the
+  // callback returns at once, and the answer runs on the engine's thread with no
+  // lock held against it.
+  post([this, line_id, remote_uri] {
+    if (callback_ != nullptr) {
+      callback_->on_incoming_call(line_id, remote_uri);
+    }
+  });
 }
 
 void PjsipSipEngine::notify_call_state(int line_id, const pj::CallInfo& info) {
@@ -636,6 +646,12 @@ void PjsipSipEngine::notify_call_state(int line_id, const pj::CallInfo& info) {
   store_call_status(line_id, status);
 
   if (callback_ != nullptr) {
+    // Deliberately inline, unlike `notify_incoming_call`: this runs on the
+    // library's thread with its lock held, which is safe only while the handler
+    // keeps to the rule
+    // (`SipEngineCallback`): it records state and gates the router, and calls
+    // nothing back into the engine.  An engine call added here would deadlock
+    // exactly as the incoming-call answer did.
     callback_->on_line_state(line_id, state, info.lastStatusCode, info.stateText);
   }
 
